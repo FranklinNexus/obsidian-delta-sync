@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "verify:release": "node scripts/verify-release.mjs",
     "install:test": "node scripts/install-local.mjs .test-vaults/device-a .test-vaults/device-b",
     "install:main": "node scripts/install-local.mjs /Users/mrblacklu/文档/obsidian_notes"
   },
@@ -23,6 +24,14 @@
   ],
   "author": "luhaifeng666",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/luhaifeng666/obsidian-docs-sync.git"
+  },
+  "bugs": {
+    "url": "https://github.com/luhaifeng666/obsidian-docs-sync/issues"
+  },
+  "homepage": "https://github.com/luhaifeng666/obsidian-docs-sync#readme",
   "devDependencies": {
     "@eslint/js": "^9.31.0",
     "@types/node": "^24.1.0",

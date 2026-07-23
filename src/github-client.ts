@@ -92,6 +92,28 @@ interface GitHubBlob {
   encoding: string;
 }
 
+const BLOB_UPLOAD_CONCURRENCY = 4;
+
+async function mapWithConcurrency<T, R>(
+  values: T[],
+  concurrency: number,
+  mapper: (value: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(values.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(concurrency, values.length) }, async () => {
+    while (nextIndex < values.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      const value = values[index];
+      if (value === undefined) continue;
+      results[index] = await mapper(value);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 function objectValue(value: unknown, context: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error(`Invalid GitHub response for ${context}`);
@@ -267,17 +289,20 @@ export class GitHubClient implements RemoteRepository {
       baseTree = parseCommit(commitResponse.json).tree.sha;
     }
 
-    const entries: Record<string, unknown>[] = [];
-    for (const mutation of mutations) {
-      if (mutation.kind === "delete") {
-        entries.push({ path: mutation.path, mode: "100644", type: "blob", sha: null });
-      } else if (mutation.kind === "reuse") {
-        entries.push({ path: mutation.path, mode: "100644", type: "blob", sha: mutation.sha });
-      } else {
+    const entries = await mapWithConcurrency(
+      mutations,
+      BLOB_UPLOAD_CONCURRENCY,
+      async (mutation): Promise<Record<string, unknown>> => {
+        if (mutation.kind === "delete") {
+          return { path: mutation.path, mode: "100644", type: "blob", sha: null };
+        }
+        if (mutation.kind === "reuse") {
+          return { path: mutation.path, mode: "100644", type: "blob", sha: mutation.sha };
+        }
         const sha = await this.createBlob(mutation.bytes);
-        entries.push({ path: mutation.path, mode: "100644", type: "blob", sha });
-      }
-    }
+        return { path: mutation.path, mode: "100644", type: "blob", sha };
+      },
+    );
 
     if (entries.length === 0) {
       return { commitSha: expectedHead ?? "", snapshot: await this.getSnapshot() };

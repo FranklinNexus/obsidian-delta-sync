@@ -52,9 +52,22 @@ obsidian dev:mobile on
 
 See [PRIVACY.md](PRIVACY.md). A private GitHub repository is access-controlled but is not client-side end-to-end encryption. This initial release intentionally preserves readable Git history and diffs.
 
+### Disclosures
+
+- **Account requirement:** Docs Sync requires a GitHub account, a repository, and a fine-grained personal access token with repository Contents read/write permission.
+- **Network use:** Docs Sync connects directly to `api.github.com` to read and update the configured repository. It does not contact the plugin author or any analytics service.
+- **External files:** Only files inside the current vault are considered for sync. The exclusions and file-size limit described above are applied before upload.
+- **Payments, ads, and telemetry:** The plugin has no paid features, advertising, analytics, or telemetry.
+
+Security issues should be reported using the private process in [SECURITY.md](SECURITY.md), not a public issue.
+
 ## Limitations
 
 - The default maximum file size is 25 MB; the UI hard limit is 100 MB.
 - GitHub synchronization is periodic, not real-time.
 - Rename detection is represented safely as create/delete when Git cannot prove a rename.
 - Secret Storage has no delete API in the current Obsidian SDK; disconnecting replaces the stored value with an empty secret.
+
+## Release process
+
+Maintainer instructions for publishing GitHub release assets and submitting to the Obsidian Community directory are in [RELEASING.md](RELEASING.md).

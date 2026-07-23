@@ -1,4 +1,4 @@
-import { cp, mkdir } from "node:fs/promises";
+import { cp, mkdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import process from "node:process";
 
@@ -7,8 +7,22 @@ if (roots.length === 0) {
   throw new Error("Provide at least one vault root");
 }
 
+const manifest = /** @type {unknown} */ (
+  JSON.parse(await readFile(resolve("manifest.json"), "utf8"))
+);
+if (
+  typeof manifest !== "object" ||
+  manifest === null ||
+  !("id" in manifest) ||
+  typeof manifest.id !== "string" ||
+  manifest.id.length === 0
+) {
+  throw new Error("manifest.json must contain a plugin id");
+}
+const pluginId = manifest.id;
+
 for (const root of roots) {
-  const destination = resolve(root, ".obsidian/plugins/obsidian-docs-sync");
+  const destination = resolve(root, ".obsidian/plugins", pluginId);
   await mkdir(destination, { recursive: true });
   for (const file of ["main.js", "manifest.json", "styles.css"]) {
     await cp(resolve(file), resolve(destination, file));
