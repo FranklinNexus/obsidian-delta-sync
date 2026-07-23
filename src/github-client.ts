@@ -166,6 +166,7 @@ export class GitHubClient implements RemoteRepository {
         Authorization: `Bearer ${this.options.token}`,
         "X-GitHub-Api-Version": "2026-03-10",
         "Content-Type": "application/json",
+        "Cache-Control": "no-cache",
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
@@ -199,7 +200,10 @@ export class GitHubClient implements RemoteRepository {
 
   private async getHead(): Promise<string | null> {
     try {
-      const response = await this.request(`/git/ref/heads/${this.branchPath()}`);
+      const nonce = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+      const response = await this.request(
+        `/git/ref/heads/${this.branchPath()}?sync_nonce=${encodeURIComponent(nonce)}`,
+      );
       return parseRef(response.json).object.sha;
     } catch (error) {
       if (error instanceof GitHubApiError && error.status === 404) return null;

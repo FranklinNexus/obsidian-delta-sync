@@ -67,7 +67,9 @@ describe("GitHubClient", () => {
     expect(snapshot.commitSha).toBe("head-1");
     expect(snapshot.files.get("note.md")?.sha).toBe("blob-1");
     expect(transport.requests[0]?.url).toContain("/git/ref/heads/feature/sync");
+    expect(transport.requests[0]?.url).toContain("sync_nonce=");
     expect(transport.requests[0]?.headers.Authorization).toBe("Bearer secret");
+    expect(transport.requests[0]?.headers["Cache-Control"]).toBe("no-cache");
   });
 
   it("creates one commit and updates the branch without force", async () => {
