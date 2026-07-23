@@ -78,7 +78,6 @@ describe("GitHubClient", () => {
       created({ sha: "tree-new" }),
       created({ sha: "head-2" }),
       ok({ object: { sha: "head-2" } }),
-      ok({ object: { sha: "head-2" } }),
       ok({ sha: "head-2", tree: { sha: "tree-new" } }),
       ok({
         sha: "tree-new",

@@ -210,6 +210,10 @@ export class GitHubClient implements RemoteRepository {
   async getSnapshot(): Promise<RemoteSnapshot> {
     const head = await this.getHead();
     if (head === null) return { commitSha: null, treeSha: null, files: new Map() };
+    return this.getSnapshotAt(head);
+  }
+
+  private async getSnapshotAt(head: string): Promise<RemoteSnapshot> {
     const commitResponse = await this.request(`/git/commits/${encodeURIComponent(head)}`);
     const commit = parseCommit(commitResponse.json);
     const treeResponse = await this.request(
@@ -306,6 +310,6 @@ export class GitHubClient implements RemoteRepository {
       });
     }
 
-    return { commitSha, snapshot: await this.getSnapshot() };
+    return { commitSha, snapshot: await this.getSnapshotAt(commitSha) };
   }
 }
