@@ -14,6 +14,15 @@ import { errorMessage } from "./utils";
 
 const MAX_LOGS = 50;
 
+function getOSName(): string {
+  if (Platform.isMacOS) return "macos";
+  if (Platform.isWin) return "windows";
+  if (Platform.isLinux) return "linux";
+  if (Platform.isIosApp) return "ios";
+  if (Platform.isAndroidApp) return "android";
+  return "unknown";
+}
+
 export default class DocsSyncPlugin extends Plugin {
   data!: PluginData;
   private statusBar!: HTMLElement;
@@ -82,7 +91,7 @@ export default class DocsSyncPlugin extends Plugin {
         ...storedSettings,
         deviceName:
           storedSettings.deviceName ||
-          `${Platform.isMobile ? "mobile" : "desktop"}-${navigator.platform || "device"}`,
+          `${Platform.isMobile ? "mobile" : "desktop"}-${getOSName()}`,
         vaultInstanceId,
       },
       syncState: stored?.syncState ?? { ...EMPTY_SYNC_STATE, entries: {} },
