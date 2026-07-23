@@ -1,0 +1,5 @@
+main.js
+node_modules
+.test-vaults
+coverage
+package-lock.json

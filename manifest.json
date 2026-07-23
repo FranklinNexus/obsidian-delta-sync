@@ -1,0 +1,9 @@
+{
+  "id": "obsidian-docs-sync",
+  "name": "Docs Sync",
+  "version": "0.1.0",
+  "minAppVersion": "1.12.7",
+  "description": "Safely sync notes and attachments through a private GitHub repository.",
+  "author": "luhaifeng666",
+  "isDesktopOnly": false
+}
