@@ -1,5 +1,5 @@
 import { Notice, Platform, Plugin } from "obsidian";
-import { GitHubClient } from "./github-client";
+import { GitHubApiError, GitHubClient } from "./github-client";
 import { ObsidianVaultAdapter } from "./obsidian-vault";
 import { DocsSyncSettingTab, SyncSummaryModal } from "./settings";
 import { summarizePlan, SyncEngine, type PreviewResult } from "./sync-engine";
@@ -219,9 +219,28 @@ export default class DocsSyncPlugin extends Plugin {
   }
 
   private async executeSync(engine: SyncEngine, preview: PreviewResult): Promise<void> {
-    this.setStatus("uploading", "Docs Sync: synchronizing…");
-    const result = await engine.run(this.data.syncState, preview);
-    await this.handleSuccess(result);
+    let activeEngine = engine;
+    let activePreview = preview;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        this.setStatus("uploading", "Docs Sync: synchronizing…");
+        const result = await activeEngine.run(this.data.syncState, activePreview);
+        await this.handleSuccess(result);
+        return;
+      } catch (error) {
+        if (attempt >= 2 || !this.isRetryableConflict(error)) throw error;
+        this.setStatus("scanning", `Docs Sync: remote changed, retrying ${attempt + 1}/2…`);
+        await new Promise((resolve) => window.setTimeout(resolve, 1000 * 2 ** attempt));
+        activeEngine = this.engine();
+        activePreview = await activeEngine.preview(this.data.syncState);
+      }
+    }
+  }
+
+  private isRetryableConflict(error: unknown): boolean {
+    if (!(error instanceof GitHubApiError)) return false;
+    if (error.status === 409) return true;
+    return error.status === 422 && /fast forward|reference update failed/i.test(error.message);
   }
 
   private async handleSuccess(result: SyncRunResult): Promise<void> {
