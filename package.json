@@ -1,6 +1,6 @@
 {
   "name": "obsidian-docs-sync",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Safely sync an Obsidian vault through a private GitHub repository.",
   "type": "module",
   "main": "main.js",
