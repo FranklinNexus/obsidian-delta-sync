@@ -5,6 +5,7 @@ import type {
   RemoteMutation,
   RemoteRepository,
   RemoteSnapshot,
+  SyncState,
 } from "./types";
 import { base64ToBytes, bytesToBase64 } from "./utils";
 
@@ -12,6 +13,7 @@ export interface TransportResponse {
   status: number;
   json: unknown;
   text: string;
+  arrayBuffer?: ArrayBuffer;
 }
 
 export interface RequestTransport {
@@ -20,6 +22,7 @@ export interface RequestTransport {
     method: string;
     headers: Record<string, string>;
     body?: string;
+    raw?: boolean;
   }): Promise<TransportResponse>;
 }
 
@@ -29,6 +32,7 @@ export class ObsidianRequestTransport implements RequestTransport {
     method: string;
     headers: Record<string, string>;
     body?: string;
+    raw?: boolean;
   }): Promise<TransportResponse> {
     const response = await requestUrl({
       url: options.url,
@@ -37,11 +41,15 @@ export class ObsidianRequestTransport implements RequestTransport {
       ...(options.body === undefined ? {} : { body: options.body }),
       throw: false,
     });
-    return {
-      status: response.status,
-      json: response.json as unknown,
-      text: response.text,
-    };
+    if (options.raw && response.status >= 200 && response.status < 300) {
+      return {
+        status: response.status,
+        json: null,
+        text: "",
+        arrayBuffer: response.arrayBuffer,
+      };
+    }
+    return { status: response.status, json: response.json as unknown, text: response.text };
   }
 }
 
@@ -179,18 +187,24 @@ export class GitHubClient implements RemoteRepository {
     this.apiRoot = `https://api.github.com/repos/${encodeURIComponent(options.owner)}/${encodeURIComponent(options.repository)}`;
   }
 
-  private async request(path: string, method = "GET", body?: unknown): Promise<TransportResponse> {
+  private async request(
+    path: string,
+    method = "GET",
+    body?: unknown,
+    accept = "application/vnd.github+json",
+  ): Promise<TransportResponse> {
     const response = await this.transport.request({
       url: `${this.apiRoot}${path}`,
       method,
       headers: {
-        Accept: "application/vnd.github+json",
+        Accept: accept,
         Authorization: `Bearer ${this.options.token}`,
         "X-GitHub-Api-Version": "2026-03-10",
         "Content-Type": "application/json",
         "Cache-Control": "no-cache",
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      ...(accept === "application/vnd.github.raw+json" ? { raw: true } : {}),
     });
     if (response.status < 200 || response.status >= 300) {
       let message = response.text || `GitHub request failed with status ${response.status}`;
@@ -233,9 +247,21 @@ export class GitHubClient implements RemoteRepository {
     }
   }
 
-  async getSnapshot(): Promise<RemoteSnapshot> {
+  async getSnapshot(knownState?: SyncState): Promise<RemoteSnapshot> {
     const head = await this.getHead();
     if (head === null) return { commitSha: null, treeSha: null, files: new Map() };
+    if (knownState?.baseCommitSha === head) {
+      return {
+        commitSha: head,
+        treeSha: null,
+        files: new Map(
+          Object.entries(knownState.entries).map(([path, entry]) => [
+            path,
+            { path, sha: entry.blobSha, size: entry.size },
+          ]),
+        ),
+      };
+    }
     return this.getSnapshotAt(head);
   }
 
@@ -258,7 +284,13 @@ export class GitHubClient implements RemoteRepository {
   }
 
   async readBlob(sha: string): Promise<Uint8Array> {
-    const response = await this.request(`/git/blobs/${encodeURIComponent(sha)}`);
+    const response = await this.request(
+      `/git/blobs/${encodeURIComponent(sha)}`,
+      "GET",
+      undefined,
+      "application/vnd.github.raw+json",
+    );
+    if (response.arrayBuffer) return new Uint8Array(response.arrayBuffer);
     const blob = parseBlob(response.json);
     if (blob.encoding !== "base64")
       throw new Error(`Unsupported GitHub blob encoding: ${blob.encoding}`);

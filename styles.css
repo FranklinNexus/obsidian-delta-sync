@@ -1,8 +1,8 @@
-.obsidian-docs-sync-status {
+.obsidian-delta-sync-status {
   color: var(--text-muted);
 }
 
-.obsidian-docs-sync-summary {
+.obsidian-delta-sync-summary {
   margin: var(--size-4-3) 0;
   padding: var(--size-4-3);
   border: 1px solid var(--background-modifier-border);
@@ -11,6 +11,6 @@
   white-space: pre-wrap;
 }
 
-.obsidian-docs-sync-danger {
+.obsidian-delta-sync-danger {
   color: var(--text-error);
 }

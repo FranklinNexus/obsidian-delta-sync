@@ -1,31 +1,69 @@
-# Docs Sync
+# Delta Sync
 
-Docs Sync is an Obsidian plugin that synchronizes notes and small attachments through a branch in a private GitHub repository. It is designed for desktop and mobile Obsidian without Git CLI, Node file-system, or Electron dependencies.
+Delta Sync synchronizes an Obsidian vault through a GitHub repository without a local Git
+installation. It is designed for one writer device and any number of pull-only follower devices.
+It runs only while Obsidian is open.
 
-> Back up your vault before enabling any synchronization plugin. Do not run Docs Sync together with Obsidian Sync, iCloud vault sync, Remotely Save, Self-hosted LiveSync, or another tool that writes the same files.
+This project is a local fork of
+[Docs Sync](https://github.com/luhaifeng666/obsidian-docs-sync). The original MIT license and
+copyright notice are retained.
 
-## Features
+[中文说明](README.zh-CN.md)
 
-- One verified Git commit per sync operation.
-- Optimistic branch-head checks and no force pushes.
-- Three-way change detection from the last successful common commit.
-- Conflict copies preserve both versions instead of silently overwriting a note.
-- Remote deletions use the Obsidian trash.
-- Manual, startup, foreground, and interval synchronization.
-- `.obsidian`, `.trash`, `.git`, oversized files, and custom globs are excluded.
-- GitHub tokens are stored with Obsidian Secret Storage, not plugin `data.json`.
+## Why it is incremental
+
+- The first sync reads each included local file once.
+- Later syncs enumerate paths and compare `mtime` and size against a persistent local index.
+- Vault file events force a re-read even when a filesystem timestamp is unchanged.
+- Unchanged files reuse their cached Git blob SHA and are not opened or hashed again.
+- If the GitHub branch HEAD is unchanged, the cached remote tree is reused after one HEAD request.
+- If the branch changed, only tree metadata is fetched and only changed blobs are downloaded.
+- Blob downloads use raw bytes instead of a base64 text copy.
+
+## Device roles
+
+### Writer
+
+A writer uploads local changes, pulls remote changes, and creates one atomic Git commit per sync.
+The branch head is checked before every commit and force pushes are never used.
+
+Use a fine-grained GitHub token restricted to the selected repository with:
+
+- `Contents: Read and write`
+
+### Pull-only follower
+
+A follower never creates commits or updates a Git reference. Remote content is authoritative.
+If a follower file was edited locally, Delta Sync saves that version as a timestamped
+`sync-conflict-local` copy before restoring or deleting the canonical path.
+
+Use a fine-grained GitHub token restricted to the selected repository with:
+
+- `Contents: Read-only`
+
+The read-only token also enforces the role on GitHub.
 
 ## Setup
 
-1. Back up the vault.
-2. Create or select a private GitHub repository and a dedicated branch.
-3. Create a fine-grained personal access token limited to that repository with **Contents: Read and write**.
-4. Open **Settings → Community plugins → Docs Sync**.
-5. Enter the owner, repository, branch, device name, and token.
-6. Test the connection and preview the first sync.
-7. Review the counts, then explicitly confirm the first sync.
+1. Install and enable Delta Sync on each device.
+2. Select the same GitHub repository and branch.
+3. Set the desktop device to `Writer` and mobile devices to `Pull-only follower`.
+4. Store the appropriate fine-grained token in Obsidian Secret Storage.
+5. Test the connection.
+6. Preview and explicitly confirm the first sync.
+7. Enable automatic sync to run on startup, app foreground, and the configured interval.
 
-Automatic sync is disabled by default. The plugin only runs while Obsidian is open.
+Do not run another tool that writes the same vault files. `.obsidian`, `.trash`, `.git`, oversized
+files, and custom glob patterns are excluded. Remote deletions use the Obsidian trash.
+
+## Limits
+
+- GitHub repositories only.
+- Default maximum file size: 25 MB. Configurable up to the GitHub hard limit of 100 MB.
+- First sync must read or download every included file once.
+- Synchronization is periodic, not real-time.
+- Rename operations are represented as create plus delete.
+- The repository is access-controlled but files are not end-to-end encrypted.
 
 ## Development
 
@@ -36,38 +74,10 @@ npm run lint
 npm run typecheck
 npm test
 npm run build
-npm run install:test
 ```
 
-Use an isolated vault for development. Reload and inspect the plugin with:
+Install a local build into one or more test vaults with:
 
 ```bash
-obsidian plugin:reload id=obsidian-docs-sync
-obsidian dev:errors
-obsidian dev:console level=error
-obsidian dev:mobile on
+node scripts/install-local.mjs /path/to/vault
 ```
-
-## Privacy and security
-
-See [PRIVACY.md](PRIVACY.md). A private GitHub repository is access-controlled but is not client-side end-to-end encryption. This initial release intentionally preserves readable Git history and diffs.
-
-### Disclosures
-
-- **Account requirement:** Docs Sync requires a GitHub account, a repository, and a fine-grained personal access token with repository Contents read/write permission.
-- **Network use:** Docs Sync connects directly to `api.github.com` to read and update the configured repository. It does not contact the plugin author or any analytics service.
-- **External files:** Only files inside the current vault are considered for sync. The exclusions and file-size limit described above are applied before upload.
-- **Payments, ads, and telemetry:** The plugin has no paid features, advertising, analytics, or telemetry.
-
-Security issues should be reported using the private process in [SECURITY.md](SECURITY.md), not a public issue.
-
-## Limitations
-
-- The default maximum file size is 25 MB; the UI hard limit is 100 MB.
-- GitHub synchronization is periodic, not real-time.
-- Rename detection is represented safely as create/delete when Git cannot prove a rename.
-- Secret Storage has no delete API in the current Obsidian SDK; disconnecting replaces the stored value with an empty secret.
-
-## Release process
-
-Maintainer instructions for publishing GitHub release assets and submitting to the Obsidian Community directory are in [RELEASING.md](RELEASING.md).

@@ -1,10 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { SyncEngine } from "../src/sync-engine";
-import { DEFAULT_SETTINGS, EMPTY_SYNC_STATE, type SyncSettings } from "../src/types";
+import {
+  DEFAULT_SETTINGS,
+  EMPTY_SYNC_STATE,
+  type DeviceMode,
+  type SyncSettings,
+} from "../src/types";
 import { MemoryRemote, MemoryVault } from "./helpers";
 
-function settings(deviceName: string): SyncSettings {
-  return { ...DEFAULT_SETTINGS, deviceName, maxFileSizeMb: 25, vaultInstanceId: deviceName };
+function settings(deviceName: string, deviceMode: DeviceMode = "writer"): SyncSettings {
+  return {
+    ...DEFAULT_SETTINGS,
+    deviceName,
+    deviceMode,
+    maxFileSizeMb: 25,
+    vaultInstanceId: deviceName,
+  };
 }
 
 describe("SyncEngine", () => {
@@ -42,10 +53,11 @@ describe("SyncEngine", () => {
     deviceB.setText("note.md", "from B");
     const resultB = await new SyncEngine(deviceB, remote, settings("device-b")).run(
       baselineB.nextState,
+      baselineB.nextLocalIndex,
     );
     expect(resultB.summary.uploaded).toBe(1);
 
-    const resultA = await engineA.run(baseline.nextState);
+    const resultA = await engineA.run(baseline.nextState, baseline.nextLocalIndex);
     expect(resultA.summary.conflicts).toBe(1);
     expect(deviceA.text("note.md")).toBe("from A");
     const conflict = [...deviceA.files.keys()].find((path) => path.includes("sync-conflict"));
@@ -62,7 +74,7 @@ describe("SyncEngine", () => {
 
     const remoteWriter = new MemoryVault();
     await new SyncEngine(remoteWriter, remote, settings("other")).run(baseline.nextState);
-    const result = await engine.run(baseline.nextState);
+    const result = await engine.run(baseline.nextState, baseline.nextLocalIndex);
     expect(result.summary.deletedLocal).toBe(1);
     expect(vault.trashed).toContain("delete.md");
   });
@@ -98,5 +110,93 @@ describe("SyncEngine", () => {
     expect(result.summary.uploaded).toBe(1);
     expect(result.summary.skipped).toBe(1);
     expect((await remote.getSnapshot()).files.has("ok.md")).toBe(true);
+  });
+
+  it("reads no local content when an indexed vault is unchanged", async () => {
+    const remote = new MemoryRemote();
+    const vault = new MemoryVault({ "a.md": "a", "b.md": "b" });
+    const engine = new SyncEngine(vault, remote, settings("writer"));
+    const baseline = await engine.run({ ...EMPTY_SYNC_STATE, entries: {} });
+    vault.readCounts.clear();
+    const fullSnapshotsBefore = remote.fullSnapshotReads;
+
+    const result = await engine.run(baseline.nextState, baseline.nextLocalIndex);
+
+    expect(result.summary.localFilesRead).toBe(0);
+    expect(result.summary.localFilesReused).toBe(2);
+    expect(vault.readCounts.size).toBe(0);
+    expect(remote.fullSnapshotReads).toBe(fullSnapshotsBefore);
+  });
+
+  it("reads and uploads only the changed local file", async () => {
+    const remote = new MemoryRemote();
+    const vault = new MemoryVault({ "changed.md": "old", "stable.md": "stable" });
+    const engine = new SyncEngine(vault, remote, settings("writer"));
+    const baseline = await engine.run({ ...EMPTY_SYNC_STATE, entries: {} });
+    vault.readCounts.clear();
+    vault.setText("changed.md", "new");
+
+    const result = await engine.run(baseline.nextState, baseline.nextLocalIndex);
+
+    expect(result.summary.uploaded).toBe(1);
+    expect(result.summary.localFilesRead).toBe(1);
+    expect(vault.readCounts.get("changed.md")).toBe(1);
+    expect(vault.readCounts.has("stable.md")).toBe(false);
+  });
+
+  it("never uploads local-only files from a follower", async () => {
+    const remote = new MemoryRemote();
+    const follower = new MemoryVault({ "local-only.md": "draft" });
+    const result = await new SyncEngine(follower, remote, settings("phone", "follower")).run({
+      ...EMPTY_SYNC_STATE,
+      entries: {},
+    });
+
+    expect(result.summary.uploaded).toBe(0);
+    expect(result.summary.skipped).toBe(1);
+    expect((await remote.getSnapshot()).files.size).toBe(0);
+    expect(follower.text("local-only.md")).toBe("draft");
+  });
+
+  it("preserves an accidental follower edit and restores the remote version", async () => {
+    const remote = new MemoryRemote();
+    await remote.seed({ "note.md": "remote base" });
+    const follower = new MemoryVault({ "note.md": "remote base" });
+    const engine = new SyncEngine(follower, remote, settings("phone", "follower"));
+    const baseline = await engine.run({ ...EMPTY_SYNC_STATE, entries: {} });
+    const remoteHead = (await remote.getSnapshot()).commitSha;
+    follower.setText("note.md", "accidental local edit");
+
+    const result = await engine.run(baseline.nextState, baseline.nextLocalIndex);
+
+    expect(result.summary.uploaded).toBe(0);
+    expect(result.summary.conflicts).toBe(1);
+    expect(follower.text("note.md")).toBe("remote base");
+    const conflict = [...follower.files.keys()].find((path) =>
+      path.includes("sync-conflict-local"),
+    );
+    expect(conflict).toBeDefined();
+    expect(follower.text(conflict ?? "")).toBe("accidental local edit");
+    expect((await remote.getSnapshot()).commitSha).toBe(remoteHead);
+  });
+
+  it("preserves a follower edit before applying a remote deletion", async () => {
+    const remote = new MemoryRemote();
+    await remote.seed({ "note.md": "remote base" });
+    const follower = new MemoryVault({ "note.md": "remote base" });
+    const engine = new SyncEngine(follower, remote, settings("phone", "follower"));
+    const baseline = await engine.run({ ...EMPTY_SYNC_STATE, entries: {} });
+    follower.setText("note.md", "local edit");
+    await remote.remove("note.md");
+
+    const result = await engine.run(baseline.nextState, baseline.nextLocalIndex);
+
+    expect(result.summary.uploaded).toBe(0);
+    expect(result.summary.conflicts).toBe(1);
+    expect(follower.text("note.md")).toBeUndefined();
+    const conflict = [...follower.files.keys()].find((path) =>
+      path.includes("sync-conflict-local"),
+    );
+    expect(follower.text(conflict ?? "")).toBe("local edit");
   });
 });

@@ -1,7 +1,8 @@
 {
-  "name": "obsidian-docs-sync",
-  "version": "0.1.1",
-  "description": "Safely sync an Obsidian vault through a private GitHub repository.",
+  "name": "obsidian-delta-sync",
+  "version": "0.2.0",
+  "description": "Incremental GitHub sync for writer and pull-only Obsidian devices.",
+  "private": true,
   "type": "module",
   "main": "main.js",
   "scripts": {
@@ -15,23 +16,23 @@
     "test:watch": "vitest",
     "verify:release": "node scripts/verify-release.mjs",
     "install:test": "node scripts/install-local.mjs .test-vaults/device-a .test-vaults/device-b",
-    "install:main": "node scripts/install-local.mjs /Users/mrblacklu/文档/obsidian_notes"
+    "install:main": "node scripts/install-local.mjs"
   },
   "keywords": [
     "obsidian",
     "github",
     "sync"
   ],
-  "author": "luhaifeng666",
+  "author": "FranklinNexus",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/luhaifeng666/obsidian-docs-sync.git"
+    "url": "git+https://github.com/FranklinNexus/obsidian-delta-sync.git"
   },
   "bugs": {
-    "url": "https://github.com/luhaifeng666/obsidian-docs-sync/issues"
+    "url": "https://github.com/FranklinNexus/obsidian-delta-sync/issues"
   },
-  "homepage": "https://github.com/luhaifeng666/obsidian-docs-sync#readme",
+  "homepage": "https://github.com/FranklinNexus/obsidian-delta-sync#readme",
   "devDependencies": {
     "@eslint/js": "^9.31.0",
     "@types/node": "^24.1.0",

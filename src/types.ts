@@ -1,10 +1,13 @@
 export type SyncPhase = "idle" | "scanning" | "downloading" | "uploading" | "conflict" | "failed";
 
+export type DeviceMode = "writer" | "follower";
+
 export interface SyncSettings {
   owner: string;
   repository: string;
   branch: string;
   deviceName: string;
+  deviceMode: DeviceMode;
   autoSync: boolean;
   intervalMinutes: number;
   maxFileSizeMb: number;
@@ -18,6 +21,12 @@ export interface BaseEntry {
   sha256: string;
   size: number;
 }
+
+export interface LocalIndexEntry extends BaseEntry {
+  mtime: number;
+}
+
+export type LocalIndex = Record<string, LocalIndexEntry>;
 
 export interface SyncState {
   baseCommitSha: string | null;
@@ -35,15 +44,30 @@ export interface SyncLogEntry {
 export interface PluginData {
   settings: SyncSettings;
   syncState: SyncState;
+  localIndex: LocalIndex;
   logs: SyncLogEntry[];
 }
 
 export interface LocalFileSnapshot {
   path: string;
-  bytes: Uint8Array;
+  bytes?: Uint8Array;
   gitSha: string;
   sha256: string;
   size: number;
+  mtime: number;
+}
+
+export interface LocalScanStats {
+  enumerated: number;
+  read: number;
+  reused: number;
+}
+
+export interface LocalScanResult {
+  files: Map<string, LocalFileSnapshot>;
+  index: LocalIndex;
+  skipped: string[];
+  stats: LocalScanStats;
 }
 
 export interface RemoteFileSnapshot {
@@ -64,6 +88,10 @@ export type SyncDecisionKind =
   | "download-remote"
   | "delete-remote"
   | "delete-local"
+  | "follower-local-only"
+  | "follower-restore-remote"
+  | "follower-restore-deleted"
+  | "follower-preserve-before-delete"
   | "conflict-both-modified"
   | "conflict-local-modified-remote-deleted"
   | "conflict-local-deleted-remote-modified";
@@ -79,6 +107,7 @@ export interface SyncPlan {
   remoteCommitSha: string | null;
   decisions: SyncDecision[];
   skipped: string[];
+  scanStats: LocalScanStats;
 }
 
 export interface SyncSummary {
@@ -88,6 +117,8 @@ export interface SyncSummary {
   deletedRemote: number;
   conflicts: number;
   skipped: number;
+  localFilesRead: number;
+  localFilesReused: number;
 }
 
 export type RemoteMutation =
@@ -102,7 +133,7 @@ export interface CommitResult {
 
 export interface RemoteRepository {
   testConnection(): Promise<void>;
-  getSnapshot(): Promise<RemoteSnapshot>;
+  getSnapshot(knownState?: SyncState): Promise<RemoteSnapshot>;
   readBlob(sha: string): Promise<Uint8Array>;
   commit(
     expectedHead: string | null,
@@ -115,10 +146,9 @@ export interface LocalVault {
   scan(
     maxFileSizeBytes: number,
     excludePatterns: string[],
-  ): Promise<{
-    files: Map<string, LocalFileSnapshot>;
-    skipped: string[];
-  }>;
+    localIndex: LocalIndex,
+  ): Promise<LocalScanResult>;
+  read(path: string): Promise<Uint8Array>;
   write(path: string, bytes: Uint8Array): Promise<void>;
   trash(path: string): Promise<void>;
 }
@@ -128,6 +158,7 @@ export interface SyncRunResult {
   summary: SyncSummary;
   commitSha: string | null;
   nextState: SyncState;
+  nextLocalIndex: LocalIndex;
 }
 
 export const DEFAULT_SETTINGS: SyncSettings = {
@@ -135,6 +166,7 @@ export const DEFAULT_SETTINGS: SyncSettings = {
   repository: "",
   branch: "main",
   deviceName: "",
+  deviceMode: "writer",
   autoSync: false,
   intervalMinutes: 5,
   maxFileSizeMb: 25,
@@ -147,3 +179,5 @@ export const EMPTY_SYNC_STATE: SyncState = {
   baseCommitSha: null,
   entries: {},
 };
+
+export const EMPTY_LOCAL_INDEX: LocalIndex = {};

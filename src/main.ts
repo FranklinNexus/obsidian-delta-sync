@@ -1,7 +1,7 @@
 import { Notice, Platform, Plugin } from "obsidian";
 import { GitHubApiError, GitHubClient } from "./github-client";
 import { ObsidianVaultAdapter } from "./obsidian-vault";
-import { DocsSyncSettingTab, SyncSummaryModal } from "./settings";
+import { DeltaSyncSettingTab, SyncSummaryModal } from "./settings";
 import { summarizePlan, SyncEngine, type PreviewResult } from "./sync-engine";
 import {
   DEFAULT_SETTINGS,
@@ -23,17 +23,26 @@ function getOSName(): string {
   return "unknown";
 }
 
-export default class DocsSyncPlugin extends Plugin {
+export default class DeltaSyncPlugin extends Plugin {
   data!: PluginData;
   private statusBar!: HTMLElement;
+  private localVault!: ObsidianVaultAdapter;
   private syncPromise: Promise<void> | null = null;
   private intervalId: number | null = null;
 
   async onload(): Promise<void> {
     await this.loadPluginData();
+    this.localVault = new ObsidianVaultAdapter(this.app.vault, this.app);
     this.statusBar = this.addStatusBarItem();
-    this.setStatus("idle", "Docs Sync: idle");
-    this.addSettingTab(new DocsSyncSettingTab(this.app, this));
+    this.setStatus("idle", "Delta Sync: idle");
+    this.addSettingTab(new DeltaSyncSettingTab(this.app, this));
+
+    this.registerEvent(this.app.vault.on("create", (file) => this.localVault.markDirty(file.path)));
+    this.registerEvent(this.app.vault.on("modify", (file) => this.localVault.markDirty(file.path)));
+    this.registerEvent(this.app.vault.on("delete", (file) => this.localVault.markDirty(file.path)));
+    this.registerEvent(
+      this.app.vault.on("rename", (file, oldPath) => this.localVault.markDirty(oldPath, file.path)),
+    );
 
     this.addCommand({
       id: "sync-now",
@@ -90,11 +99,11 @@ export default class DocsSyncPlugin extends Plugin {
         ...DEFAULT_SETTINGS,
         ...storedSettings,
         deviceName:
-          storedSettings.deviceName ||
-          `${Platform.isMobile ? "mobile" : "desktop"}-${getOSName()}`,
+          storedSettings.deviceName || `${Platform.isMobile ? "mobile" : "desktop"}-${getOSName()}`,
         vaultInstanceId,
       },
       syncState: stored?.syncState ?? { ...EMPTY_SYNC_STATE, entries: {} },
+      localIndex: stored?.localIndex ?? {},
       logs: stored?.logs ?? [],
     };
     await this.persistData();
@@ -105,7 +114,7 @@ export default class DocsSyncPlugin extends Plugin {
   }
 
   private secretId(): string {
-    return `obsidian-docs-sync-${this.data.settings.vaultInstanceId}`.toLowerCase();
+    return `obsidian-delta-sync-${this.data.settings.vaultInstanceId}`.toLowerCase();
   }
 
   hasToken(): boolean {
@@ -130,11 +139,7 @@ export default class DocsSyncPlugin extends Plugin {
   }
 
   private engine(): SyncEngine {
-    return new SyncEngine(
-      new ObsidianVaultAdapter(this.app.vault, this.app),
-      this.client(),
-      this.data.settings,
-    );
+    return new SyncEngine(this.localVault, this.client(), this.data.settings);
   }
 
   async testConnection(): Promise<void> {
@@ -154,7 +159,7 @@ export default class DocsSyncPlugin extends Plugin {
   private setStatus(phase: SyncPhase, text: string): void {
     this.statusBar.dataset.syncPhase = phase;
     this.statusBar.setText(text);
-    this.statusBar.addClass("obsidian-docs-sync-status");
+    this.statusBar.addClass("obsidian-delta-sync-status");
   }
 
   private appendLog(entry: PluginData["logs"][number]): void {
@@ -164,8 +169,9 @@ export default class DocsSyncPlugin extends Plugin {
 
   async previewSync(): Promise<void> {
     try {
-      this.setStatus("scanning", "Docs Sync: scanning…");
-      const preview = await this.engine().preview(this.data.syncState);
+      this.setStatus("scanning", "Delta Sync: scanning...");
+      const preview = await this.engine().preview(this.data.syncState, this.data.localIndex);
+      this.data.localIndex = preview.localIndex;
       const summary = summarizePlan(preview.plan);
       this.appendLog({
         timestamp: new Date().toISOString(),
@@ -174,8 +180,8 @@ export default class DocsSyncPlugin extends Plugin {
         summary,
       });
       await this.persistData();
-      new SyncSummaryModal(this.app, "Docs Sync preview", summary).open();
-      this.setStatus(summary.conflicts > 0 ? "conflict" : "idle", "Docs Sync: preview ready");
+      new SyncSummaryModal(this.app, "Delta Sync preview", summary).open();
+      this.setStatus(summary.conflicts > 0 ? "conflict" : "idle", "Delta Sync: preview ready");
     } catch (error) {
       await this.handleFailure(error);
     }
@@ -183,7 +189,7 @@ export default class DocsSyncPlugin extends Plugin {
 
   async requestSync(interactive = true): Promise<void> {
     if (this.syncPromise) {
-      if (interactive) new Notice("A Docs Sync operation is already running.");
+      if (interactive) new Notice("A Delta Sync operation is already running.");
       return this.syncPromise;
     }
     this.syncPromise = this.prepareAndRun(interactive).finally(() => {
@@ -194,31 +200,38 @@ export default class DocsSyncPlugin extends Plugin {
 
   private async prepareAndRun(interactive: boolean): Promise<void> {
     try {
-      this.setStatus("scanning", "Docs Sync: scanning…");
+      this.setStatus("scanning", "Delta Sync: scanning...");
       const engine = this.engine();
-      const preview = await engine.preview(this.data.syncState);
+      const preview = await engine.preview(this.data.syncState, this.data.localIndex);
+      this.data.localIndex = preview.localIndex;
+      await this.persistData();
       const summary = summarizePlan(preview.plan);
       if (!this.data.settings.firstSyncConfirmed) {
         if (!interactive) {
-          this.setStatus("idle", "Docs Sync: first sync needs confirmation");
+          this.setStatus("idle", "Delta Sync: first sync needs confirmation");
           return;
         }
         new SyncSummaryModal(
           this.app,
-          "Confirm first sync",
+          "Confirm first Delta Sync",
           summary,
           "Confirm and sync",
           async () => {
             try {
               this.data.settings.firstSyncConfirmed = true;
               await this.persistData();
-              await this.executeSync(engine, preview);
+              const confirmedEngine = this.engine();
+              const confirmedPreview = await confirmedEngine.preview(
+                this.data.syncState,
+                this.data.localIndex,
+              );
+              await this.executeSync(confirmedEngine, confirmedPreview);
             } catch (error) {
               await this.handleFailure(error);
             }
           },
         ).open();
-        this.setStatus("idle", "Docs Sync: awaiting confirmation");
+        this.setStatus("idle", "Delta Sync: awaiting confirmation");
         return;
       }
       await this.executeSync(engine, preview);
@@ -232,16 +245,20 @@ export default class DocsSyncPlugin extends Plugin {
     let activePreview = preview;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
-        this.setStatus("uploading", "Docs Sync: synchronizing…");
-        const result = await activeEngine.run(this.data.syncState, activePreview);
+        this.setStatus("uploading", "Delta Sync: synchronizing...");
+        const result = await activeEngine.run(
+          this.data.syncState,
+          this.data.localIndex,
+          activePreview,
+        );
         await this.handleSuccess(result);
         return;
       } catch (error) {
         if (attempt >= 2 || !this.isRetryableConflict(error)) throw error;
-        this.setStatus("scanning", `Docs Sync: remote changed, retrying ${attempt + 1}/2…`);
+        this.setStatus("scanning", `Delta Sync: remote changed, retrying ${attempt + 1}/2...`);
         await new Promise((resolve) => window.setTimeout(resolve, 1000 * 2 ** attempt));
         activeEngine = this.engine();
-        activePreview = await activeEngine.preview(this.data.syncState);
+        activePreview = await activeEngine.preview(this.data.syncState, this.data.localIndex);
       }
     }
   }
@@ -254,6 +271,7 @@ export default class DocsSyncPlugin extends Plugin {
 
   private async handleSuccess(result: SyncRunResult): Promise<void> {
     this.data.syncState = result.nextState;
+    this.data.localIndex = result.nextLocalIndex;
     this.appendLog({
       timestamp: new Date().toISOString(),
       status: "success",
@@ -263,9 +281,9 @@ export default class DocsSyncPlugin extends Plugin {
     });
     await this.persistData();
     const phase = result.summary.conflicts > 0 ? "conflict" : "idle";
-    this.setStatus(phase, `Docs Sync: ${result.summary.conflicts} conflicts`);
+    this.setStatus(phase, `Delta Sync: ${result.summary.conflicts} conflicts`);
     new Notice(
-      `Docs Sync complete: ${result.summary.uploaded} uploaded, ${result.summary.downloaded} downloaded, ${result.summary.conflicts} conflicts.`,
+      `Delta Sync complete: ${result.summary.uploaded} uploaded, ${result.summary.downloaded} downloaded, ${result.summary.conflicts} conflicts.`,
       6000,
     );
   }
@@ -278,13 +296,14 @@ export default class DocsSyncPlugin extends Plugin {
       message,
     });
     await this.persistData();
-    this.setStatus("failed", "Docs Sync: failed");
-    new Notice(`Docs Sync failed: ${message}`, 8000);
+    this.setStatus("failed", "Delta Sync: failed");
+    new Notice(`Delta Sync failed: ${message}`, 8000);
   }
 
   async disconnect(): Promise<void> {
     this.app.secretStorage.setSecret(this.secretId(), "");
     this.data.syncState = { ...EMPTY_SYNC_STATE, entries: {} };
+    this.data.localIndex = {};
     this.data.settings.firstSyncConfirmed = false;
     this.data.settings.autoSync = false;
     this.configureAutoSync();

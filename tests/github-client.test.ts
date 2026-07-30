@@ -15,6 +15,7 @@ class RecordingTransport implements RequestTransport {
     method: string;
     headers: Record<string, string>;
     body?: string;
+    raw?: boolean;
   }[] = [];
 
   constructor(private readonly responses: TransportResponse[]) {}
@@ -24,6 +25,7 @@ class RecordingTransport implements RequestTransport {
     method: string;
     headers: Record<string, string>;
     body?: string;
+    raw?: boolean;
   }): Promise<TransportResponse> {
     this.requests.push(options);
     const response = this.responses.shift();
@@ -38,6 +40,15 @@ function ok(json: unknown): TransportResponse {
 
 function created(json: unknown): TransportResponse {
   return { status: 201, json, text: JSON.stringify(json) };
+}
+
+function raw(bytes: Uint8Array): TransportResponse {
+  return {
+    status: 200,
+    json: {},
+    text: "",
+    arrayBuffer: new Uint8Array(bytes).buffer,
+  };
 }
 
 describe("GitHubClient", () => {
@@ -70,6 +81,40 @@ describe("GitHubClient", () => {
     expect(transport.requests[0]?.url).toContain("sync_nonce=");
     expect(transport.requests[0]?.headers.Authorization).toBe("Bearer secret");
     expect(transport.requests[0]?.headers["Cache-Control"]).toBe("no-cache");
+  });
+
+  it("reuses the known tree when the branch head is unchanged", async () => {
+    const transport = new RecordingTransport([ok({ object: { sha: "head-1" } })]);
+    const client = new GitHubClient({
+      owner: "owner",
+      repository: "repo",
+      branch: "main",
+      token: "secret",
+      transport,
+    });
+    const snapshot = await client.getSnapshot({
+      baseCommitSha: "head-1",
+      entries: {
+        "note.md": { blobSha: "blob-1", sha256: "sha256-1", size: 4 },
+      },
+    });
+
+    expect(snapshot.files.get("note.md")?.sha).toBe("blob-1");
+    expect(transport.requests).toHaveLength(1);
+  });
+
+  it("downloads blob bytes without base64 decoding when raw media is available", async () => {
+    const transport = new RecordingTransport([raw(new Uint8Array([0, 128, 255]))]);
+    const client = new GitHubClient({
+      owner: "owner",
+      repository: "repo",
+      branch: "main",
+      token: "secret",
+      transport,
+    });
+
+    expect(await client.readBlob("blob-1")).toEqual(new Uint8Array([0, 128, 255]));
+    expect(transport.requests[0]?.headers.Accept).toBe("application/vnd.github.raw+json");
   });
 
   it("creates one commit and updates the branch without force", async () => {

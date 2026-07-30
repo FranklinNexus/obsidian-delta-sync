@@ -1,5 +1,5 @@
 import { App, Modal, Notice, PluginSettingTab, Setting } from "obsidian";
-import type DocsSyncPlugin from "./main";
+import type DeltaSyncPlugin from "./main";
 import type { SyncSummary } from "./types";
 
 function summaryText(summary: SyncSummary): string {
@@ -10,6 +10,8 @@ function summaryText(summary: SyncSummary): string {
     `Delete remote: ${summary.deletedRemote}`,
     `Conflicts: ${summary.conflicts}`,
     `Skipped: ${summary.skipped}`,
+    `Local files read: ${summary.localFilesRead}`,
+    `Local metadata reused: ${summary.localFilesReused}`,
   ].join("\n");
 }
 
@@ -27,7 +29,7 @@ export class SyncSummaryModal extends Modal {
   onOpen(): void {
     this.setTitle(this.title);
     this.contentEl.createDiv({
-      cls: "obsidian-docs-sync-summary",
+      cls: "obsidian-delta-sync-summary",
       text: summaryText(this.summary),
     });
     if (this.confirmLabel && this.onConfirm) {
@@ -52,19 +54,19 @@ export class SyncSummaryModal extends Modal {
 export class SyncLogModal extends Modal {
   constructor(
     app: App,
-    private readonly plugin: DocsSyncPlugin,
+    private readonly plugin: DeltaSyncPlugin,
   ) {
     super(app);
   }
 
   onOpen(): void {
-    this.setTitle("Docs Sync history");
+    this.setTitle("Delta Sync history");
     if (this.plugin.data.logs.length === 0) {
       this.contentEl.createEl("p", { text: "No sync attempts yet." });
       return;
     }
     for (const entry of this.plugin.data.logs.slice(0, 20)) {
-      const block = this.contentEl.createDiv({ cls: "obsidian-docs-sync-summary" });
+      const block = this.contentEl.createDiv({ cls: "obsidian-delta-sync-summary" });
       block.createEl("strong", { text: `${entry.status.toUpperCase()} · ${entry.timestamp}` });
       block.createEl("div", { text: entry.message });
       if (entry.summary) block.createEl("pre", { text: summaryText(entry.summary) });
@@ -76,10 +78,10 @@ export class SyncLogModal extends Modal {
   }
 }
 
-export class DocsSyncSettingTab extends PluginSettingTab {
+export class DeltaSyncSettingTab extends PluginSettingTab {
   constructor(
     app: App,
-    private readonly plugin: DocsSyncPlugin,
+    private readonly plugin: DeltaSyncPlugin,
   ) {
     super(app, plugin);
   }
@@ -126,7 +128,9 @@ export class DocsSyncSettingTab extends PluginSettingTab {
       .setDesc(
         this.plugin.hasToken()
           ? "A token is stored in Obsidian Secret Storage. Enter a new value to replace it."
-          : "Use a fine-grained token limited to this repository with Contents read and write access.",
+          : settings.deviceMode === "writer"
+            ? "Use a fine-grained token limited to this repository with Contents read and write access."
+            : "Use a fine-grained token limited to this repository with Contents read-only access.",
       )
       .addText((text) => {
         text.inputEl.type = "password";
@@ -158,6 +162,24 @@ export class DocsSyncSettingTab extends PluginSettingTab {
           settings.deviceName = value.trim();
           await this.plugin.persistData();
         }),
+      );
+
+    new Setting(this.containerEl)
+      .setName("Device role")
+      .setDesc(
+        "Writer devices can commit local changes. Followers only pull and preserve accidental local edits as conflict copies.",
+      )
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("writer", "Writer")
+          .addOption("follower", "Pull-only follower")
+          .setValue(settings.deviceMode)
+          .onChange(async (value) => {
+            settings.deviceMode = value === "follower" ? "follower" : "writer";
+            settings.firstSyncConfirmed = false;
+            await this.plugin.persistData();
+            this.display();
+          }),
       );
 
     new Setting(this.containerEl)
@@ -258,7 +280,7 @@ export class DocsSyncSettingTab extends PluginSettingTab {
           .setButtonText("Disconnect")
           .onClick(async () => {
             await this.plugin.disconnect();
-            new Notice("Docs Sync disconnected.");
+            new Notice("Delta Sync disconnected.");
             this.display();
           }),
       );

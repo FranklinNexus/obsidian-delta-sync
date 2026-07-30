@@ -3,7 +3,7 @@ import { buildSyncPlan } from "../src/planner";
 import type { LocalFileSnapshot, RemoteFileSnapshot, SyncState } from "../src/types";
 
 function local(path: string, sha: string): LocalFileSnapshot {
-  return { path, bytes: new Uint8Array(), gitSha: sha, sha256: sha, size: 0 };
+  return { path, bytes: new Uint8Array(), gitSha: sha, sha256: sha, size: 0, mtime: 0 };
 }
 
 function remote(path: string, sha: string): RemoteFileSnapshot {
@@ -63,4 +63,31 @@ describe("buildSyncPlan", () => {
       "same.md": "noop",
     });
   });
+
+  it.each([
+    ["local edit", "b", "l", "b", "follower-restore-remote"],
+    ["local delete", "b", undefined, "b", "follower-restore-deleted"],
+    ["both edit", "b", "l", "r", "follower-restore-remote"],
+    ["local edit remote delete", "b", "l", undefined, "follower-preserve-before-delete"],
+    ["local-only first sync", undefined, "l", undefined, "follower-local-only"],
+  ])(
+    "plans follower %s without remote mutations",
+    (_name, baseSha, localSha, remoteSha, expected) => {
+      const path = "note.md";
+      const state: SyncState = baseSha ? base(path, baseSha) : { baseCommitSha: null, entries: {} };
+      const plan = buildSyncPlan(
+        state,
+        new Map(localSha ? [[path, local(path, localSha)]] : []),
+        remoteSha ? "remote-head" : null,
+        new Map(remoteSha ? [[path, remote(path, remoteSha)]] : []),
+        [],
+        new Date("2026-07-23T00:00:00.000Z"),
+        "follower",
+      );
+
+      expect(plan.decisions[0]?.kind).toBe(expected);
+      expect(plan.decisions.some((decision) => decision.kind === "upload-local")).toBe(false);
+      expect(plan.decisions.some((decision) => decision.kind === "delete-remote")).toBe(false);
+    },
+  );
 });

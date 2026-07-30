@@ -1,10 +1,10 @@
 {
-  "id": "docs-sync",
-  "name": "Docs Sync",
-  "version": "0.1.1",
+  "id": "delta-sync",
+  "name": "Delta Sync",
+  "version": "0.2.0",
   "minAppVersion": "1.12.7",
-  "description": "Safely sync notes and attachments through a private GitHub repository.",
-  "author": "luhaifeng666",
-  "authorUrl": "https://github.com/luhaifeng666",
+  "description": "Incremental GitHub sync with writer and pull-only device roles.",
+  "author": "FranklinNexus",
+  "authorUrl": "https://github.com/FranklinNexus",
   "isDesktopOnly": false
 }

@@ -1,10 +1,10 @@
-# Releasing Docs Sync
+# Releasing Delta Sync
 
 ## Before the first release
 
 1. Publish this source repository publicly on GitHub.
 2. Enable **Settings → Code security → Private vulnerability reporting** so `SECURITY.md` points to a working private channel.
-3. Confirm that `docs-sync` and `Docs Sync` are still available in the current Obsidian community plugin list.
+3. Confirm that `delta-sync` and `Delta Sync` are still available in the current Obsidian community plugin list.
 4. Test the plugin on desktop and mobile with an isolated vault and a dedicated private repository.
 
 ## Create a release

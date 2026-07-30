@@ -1,10 +1,13 @@
 import type {
   CommitResult,
   LocalFileSnapshot,
+  LocalIndex,
+  LocalScanResult,
   LocalVault,
   RemoteMutation,
   RemoteRepository,
   RemoteSnapshot,
+  SyncState,
 } from "../src/types";
 import { gitBlobSha, sha256, shouldExclude } from "../src/utils";
 
@@ -13,10 +16,15 @@ const encoder = new TextEncoder();
 export class MemoryVault implements LocalVault {
   readonly files = new Map<string, Uint8Array>();
   readonly trashed: string[] = [];
+  readonly readCounts = new Map<string, number>();
+  private readonly mtimes = new Map<string, number>();
+  private clock = 1;
 
   constructor(initial: Record<string, string> = {}) {
-    for (const [path, content] of Object.entries(initial))
+    for (const [path, content] of Object.entries(initial)) {
       this.files.set(path, encoder.encode(content));
+      this.mtimes.set(path, this.clock++);
+    }
   }
 
   text(path: string): string | undefined {
@@ -26,37 +34,82 @@ export class MemoryVault implements LocalVault {
 
   setText(path: string, text: string): void {
     this.files.set(path, encoder.encode(text));
+    this.mtimes.set(path, this.clock++);
   }
 
   async scan(
     maxFileSizeBytes: number,
     excludePatterns: string[],
-  ): Promise<{ files: Map<string, LocalFileSnapshot>; skipped: string[] }> {
+    localIndex: LocalIndex,
+  ): Promise<LocalScanResult> {
     const files = new Map<string, LocalFileSnapshot>();
+    const index: LocalIndex = {};
     const skipped: string[] = [];
+    let read = 0;
+    let reused = 0;
     for (const [path, bytes] of this.files) {
       if (shouldExclude(path, excludePatterns)) continue;
       if (bytes.length > maxFileSizeBytes) {
         skipped.push(path);
         continue;
       }
-      files.set(path, {
+      const mtime = this.mtimes.get(path) ?? 0;
+      const cached = localIndex[path];
+      if (cached?.size === bytes.length && cached.mtime === mtime) {
+        files.set(path, {
+          path,
+          gitSha: cached.blobSha,
+          sha256: cached.sha256,
+          size: cached.size,
+          mtime: cached.mtime,
+        });
+        index[path] = cached;
+        reused += 1;
+        continue;
+      }
+      const content = await this.read(path);
+      const snapshot: LocalFileSnapshot = {
         path,
-        bytes,
-        gitSha: await gitBlobSha(bytes),
-        sha256: await sha256(bytes),
-        size: bytes.length,
-      });
+        bytes: content,
+        gitSha: await gitBlobSha(content),
+        sha256: await sha256(content),
+        size: content.length,
+        mtime,
+      };
+      files.set(path, snapshot);
+      index[path] = {
+        blobSha: snapshot.gitSha,
+        sha256: snapshot.sha256,
+        size: snapshot.size,
+        mtime: snapshot.mtime,
+      };
+      read += 1;
     }
-    return { files, skipped };
+    return {
+      files,
+      index,
+      skipped,
+      stats: { enumerated: files.size + skipped.length, read, reused },
+    };
+  }
+
+  async read(path: string): Promise<Uint8Array> {
+    const bytes = this.files.get(path);
+    if (!bytes) throw new Error(`Unknown local file ${path}`);
+    this.readCounts.set(path, (this.readCounts.get(path) ?? 0) + 1);
+    return new Uint8Array(bytes);
   }
 
   async write(path: string, bytes: Uint8Array): Promise<void> {
     this.files.set(path, new Uint8Array(bytes));
+    this.mtimes.set(path, this.clock++);
   }
 
   async trash(path: string): Promise<void> {
-    if (this.files.delete(path)) this.trashed.push(path);
+    if (this.files.delete(path)) {
+      this.mtimes.delete(path);
+      this.trashed.push(path);
+    }
   }
 }
 
@@ -66,6 +119,7 @@ export class MemoryRemote implements RemoteRepository {
   private revision = 0;
   private head: string | null = null;
   failNextCommit = false;
+  fullSnapshotReads = 0;
 
   async seed(initial: Record<string, string>): Promise<void> {
     for (const [path, value] of Object.entries(initial)) {
@@ -78,9 +132,28 @@ export class MemoryRemote implements RemoteRepository {
     this.head = `commit-${this.revision}`;
   }
 
+  async remove(path: string): Promise<void> {
+    this.files.delete(path);
+    this.revision += 1;
+    this.head = `commit-${this.revision}`;
+  }
+
   async testConnection(): Promise<void> {}
 
-  async getSnapshot(): Promise<RemoteSnapshot> {
+  async getSnapshot(knownState?: SyncState): Promise<RemoteSnapshot> {
+    if (knownState?.baseCommitSha === this.head && this.head !== null) {
+      return {
+        commitSha: this.head,
+        treeSha: null,
+        files: new Map(
+          Object.entries(knownState.entries).map(([path, entry]) => [
+            path,
+            { path, sha: entry.blobSha, size: entry.size },
+          ]),
+        ),
+      };
+    }
+    this.fullSnapshotReads += 1;
     return {
       commitSha: this.head,
       treeSha: this.head ? `tree-${this.revision}` : null,

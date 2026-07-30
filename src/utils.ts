@@ -61,7 +61,7 @@ const DEFAULT_EXCLUDES = [
   ".obsidian/**",
   ".trash/**",
   ".git/**",
-  ".docs-sync-test-marker",
+  ".delta-sync-test-marker",
   "**/.DS_Store",
   "**/*.sync-conflict-*.tmp",
 ];
