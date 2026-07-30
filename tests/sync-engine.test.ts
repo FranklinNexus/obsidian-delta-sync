@@ -18,6 +18,22 @@ function settings(deviceName: string, deviceMode: DeviceMode = "writer"): SyncSe
   };
 }
 
+class ConcurrentReadRemote extends MemoryRemote {
+  activeReads = 0;
+  peakReads = 0;
+
+  override async readBlob(sha: string): Promise<Uint8Array> {
+    this.activeReads += 1;
+    this.peakReads = Math.max(this.peakReads, this.activeReads);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return await super.readBlob(sha);
+    } finally {
+      this.activeReads -= 1;
+    }
+  }
+}
+
 describe("SyncEngine", () => {
   it("uploads from one device and downloads to another", async () => {
     const remote = new MemoryRemote();
@@ -35,6 +51,25 @@ describe("SyncEngine", () => {
     });
     expect(second.summary.downloaded).toBe(1);
     expect(deviceB.text("note.md")).toBe("hello");
+  });
+
+  it("downloads independent remote files with bounded concurrency", async () => {
+    const remote = new ConcurrentReadRemote();
+    await remote.seed(
+      Object.fromEntries(
+        Array.from({ length: 10 }, (_, index) => [`note-${index}.md`, `${index}`]),
+      ),
+    );
+    const vault = new MemoryVault();
+
+    const result = await new SyncEngine(vault, remote, settings("follower", "follower")).run({
+      ...EMPTY_SYNC_STATE,
+      entries: {},
+    });
+
+    expect(result.summary.downloaded).toBe(10);
+    expect(remote.peakReads).toBe(4);
+    expect(vault.files).toHaveLength(10);
   });
 
   it("keeps both versions when two devices edit the same file", async () => {

@@ -23,6 +23,30 @@ export interface PreviewResult {
   remote: RemoteSnapshot;
 }
 
+const DOWNLOAD_CONCURRENCY = 4;
+
+async function forEachWithConcurrency<T>(
+  values: T[],
+  concurrency: number,
+  operation: (value: T) => Promise<void>,
+): Promise<void> {
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(concurrency, values.length) }, async () => {
+    while (nextIndex < values.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      const value = values[index];
+      if (value === undefined) return;
+      await operation(value);
+    }
+  });
+  const results = await Promise.allSettled(workers);
+  const failure = results.find(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (failure) throw failure.reason;
+}
+
 function emptySummary(plan: SyncPlan): SyncSummary {
   return {
     uploaded: 0,
@@ -115,6 +139,16 @@ export class SyncEngine {
     const summary = emptySummary(plan);
     const mutations: RemoteMutation[] = [];
 
+    const downloads = plan.decisions.filter((decision) => decision.kind === "download-remote");
+    await forEachWithConcurrency(downloads, DOWNLOAD_CONCURRENCY, async (decision) => {
+      const remoteFile = this.remoteFile(remote, decision.path);
+      await this.localVault.write(
+        decision.path,
+        await this.remoteRepository.readBlob(remoteFile.sha),
+      );
+    });
+    summary.downloaded += downloads.length;
+
     for (const decision of plan.decisions) {
       switch (decision.kind) {
         case "noop":
@@ -128,15 +162,8 @@ export class SyncEngine {
           });
           summary.uploaded += 1;
           break;
-        case "download-remote": {
-          const remoteFile = this.remoteFile(remote, decision.path);
-          await this.localVault.write(
-            decision.path,
-            await this.remoteRepository.readBlob(remoteFile.sha),
-          );
-          summary.downloaded += 1;
+        case "download-remote":
           break;
-        }
         case "delete-remote":
           mutations.push({ path: decision.path, kind: "delete" });
           summary.deletedRemote += 1;

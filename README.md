@@ -19,6 +19,7 @@ copyright notice are retained.
 - If the GitHub branch HEAD is unchanged, the cached remote tree is reused after one HEAD request.
 - If the branch changed, only tree metadata is fetched and only changed blobs are downloaded.
 - Blob downloads use raw bytes instead of a base64 text copy.
+- Initial and large follower pulls download independent files with four bounded workers.
 
 ## Device roles
 
