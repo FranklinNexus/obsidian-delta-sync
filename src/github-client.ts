@@ -100,7 +100,9 @@ interface GitHubBlob {
   encoding: string;
 }
 
-const BLOB_UPLOAD_CONCURRENCY = 4;
+const BLOB_UPLOAD_CONCURRENCY = 1;
+const BLOB_UPLOAD_INTERVAL_MS = 800;
+const SECONDARY_RATE_LIMIT_COOLDOWN_MS = 60_000;
 
 async function mapWithConcurrency<T, R>(
   values: T[],
@@ -185,6 +187,7 @@ function repositoryDefaultBranch(value: unknown): string {
 export class GitHubClient implements RemoteRepository {
   private readonly transport: RequestTransport;
   private readonly apiRoot: string;
+  private nextBlobUploadAt = 0;
 
   constructor(private readonly options: GitHubClientOptions) {
     this.transport = options.transport ?? new ObsidianRequestTransport();
@@ -319,12 +322,36 @@ export class GitHubClient implements RemoteRepository {
     return base64ToBytes(blob.content);
   }
 
+  private async waitForBlobUploadSlot(): Promise<void> {
+    const now = Date.now();
+    const scheduledAt = Math.max(now, this.nextBlobUploadAt);
+    this.nextBlobUploadAt = scheduledAt + BLOB_UPLOAD_INTERVAL_MS;
+    const delay = scheduledAt - now;
+    if (delay > 0) await new Promise((resolve) => window.setTimeout(resolve, delay));
+  }
+
+  private isSecondaryRateLimit(error: unknown): error is GitHubApiError {
+    return error instanceof GitHubApiError && /secondary rate limit/iu.test(error.message);
+  }
+
   private async createBlob(bytes: Uint8Array): Promise<string> {
-    const response = await this.request("/git/blobs", "POST", {
-      content: bytesToBase64(bytes),
-      encoding: "base64",
-    });
-    return stringValue(objectValue(response.json, "created blob").sha, "created blob sha");
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await this.waitForBlobUploadSlot();
+      try {
+        const response = await this.request("/git/blobs", "POST", {
+          content: bytesToBase64(bytes),
+          encoding: "base64",
+        });
+        return stringValue(objectValue(response.json, "created blob").sha, "created blob sha");
+      } catch (error) {
+        if (attempt === 2 || !this.isSecondaryRateLimit(error)) throw error;
+        this.nextBlobUploadAt = Math.max(
+          this.nextBlobUploadAt,
+          Date.now() + SECONDARY_RATE_LIMIT_COOLDOWN_MS,
+        );
+      }
+    }
+    throw new Error("Blob upload retry limit was reached");
   }
 
   async commit(
