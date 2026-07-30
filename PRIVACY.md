@@ -1,6 +1,6 @@
 # Privacy
 
-Docs Sync sends the selected vault files, file paths, Git commit metadata, repository owner, repository name, branch, and device name directly from Obsidian to GitHub's API.
+Delta Sync sends the selected vault files, file paths, Git commit metadata, repository owner, repository name, branch, and device name directly from Obsidian to GitHub's API.
 
 - No telemetry, analytics, advertisements, or third-party tracking are included.
 - File contents are never sent to the plugin author.

@@ -111,10 +111,15 @@ export class ObsidianVaultAdapter implements LocalVault {
     } else {
       throw new Error(`Cannot write file because a folder exists at ${normalized}`);
     }
+    this.markDirty(normalized);
   }
 
   async trash(path: string): Promise<void> {
-    const existing = this.vault.getAbstractFileByPath(normalizePath(path));
-    if (existing instanceof TFile) await this.app.fileManager.trashFile(existing);
+    const normalized = normalizePath(path);
+    const existing = this.vault.getAbstractFileByPath(normalized);
+    if (existing instanceof TFile) {
+      await this.app.fileManager.trashFile(existing);
+      this.markDirty(normalized);
+    }
   }
 }
