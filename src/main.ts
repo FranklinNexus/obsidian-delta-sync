@@ -13,6 +13,7 @@ import {
 import { errorMessage } from "./utils";
 
 const MAX_LOGS = 50;
+const LOCAL_CHANGE_SYNC_DEBOUNCE_MS = 10_000;
 
 function getOSName(): string {
   if (Platform.isMacOS) return "macos";
@@ -29,6 +30,8 @@ export default class DeltaSyncPlugin extends Plugin {
   private localVault!: ObsidianVaultAdapter;
   private syncPromise: Promise<void> | null = null;
   private intervalId: number | null = null;
+  private localChangeSyncTimeout: number | null = null;
+  private automaticSyncQueued = false;
 
   async onload(): Promise<void> {
     await this.loadPluginData();
@@ -37,11 +40,11 @@ export default class DeltaSyncPlugin extends Plugin {
     this.setStatus("idle", "Delta Sync: idle");
     this.addSettingTab(new DeltaSyncSettingTab(this.app, this));
 
-    this.registerEvent(this.app.vault.on("create", (file) => this.localVault.markDirty(file.path)));
-    this.registerEvent(this.app.vault.on("modify", (file) => this.localVault.markDirty(file.path)));
-    this.registerEvent(this.app.vault.on("delete", (file) => this.localVault.markDirty(file.path)));
+    this.registerEvent(this.app.vault.on("create", (file) => this.handleVaultChange(file.path)));
+    this.registerEvent(this.app.vault.on("modify", (file) => this.handleVaultChange(file.path)));
+    this.registerEvent(this.app.vault.on("delete", (file) => this.handleVaultChange(file.path)));
     this.registerEvent(
-      this.app.vault.on("rename", (file, oldPath) => this.localVault.markDirty(oldPath, file.path)),
+      this.app.vault.on("rename", (file, oldPath) => this.handleVaultChange(oldPath, file.path)),
     );
 
     this.addCommand({
@@ -74,6 +77,7 @@ export default class DeltaSyncPlugin extends Plugin {
     });
     this.register(() => {
       if (this.intervalId !== null) window.clearInterval(this.intervalId);
+      if (this.localChangeSyncTimeout !== null) window.clearTimeout(this.localChangeSyncTimeout);
     });
     this.configureAutoSync();
     this.app.workspace.onLayoutReady(() => {
@@ -83,6 +87,7 @@ export default class DeltaSyncPlugin extends Plugin {
 
   onunload(): void {
     if (this.intervalId !== null) window.clearInterval(this.intervalId);
+    if (this.localChangeSyncTimeout !== null) window.clearTimeout(this.localChangeSyncTimeout);
   }
 
   private async loadPluginData(): Promise<void> {
@@ -156,6 +161,20 @@ export default class DeltaSyncPlugin extends Plugin {
     this.intervalId = window.setInterval(() => void this.requestSync(false), milliseconds);
   }
 
+  private handleVaultChange(...paths: string[]): void {
+    this.localVault.markDirty(...paths);
+    this.scheduleLocalChangeSync();
+  }
+
+  private scheduleLocalChangeSync(): void {
+    if (!this.data.settings.autoSync || this.data.settings.deviceMode !== "writer") return;
+    if (this.localChangeSyncTimeout !== null) window.clearTimeout(this.localChangeSyncTimeout);
+    this.localChangeSyncTimeout = window.setTimeout(() => {
+      this.localChangeSyncTimeout = null;
+      void this.requestSync(false);
+    }, LOCAL_CHANGE_SYNC_DEBOUNCE_MS);
+  }
+
   private setStatus(phase: SyncPhase, text: string): void {
     this.statusBar.dataset.syncPhase = phase;
     this.statusBar.setText(text);
@@ -190,10 +209,15 @@ export default class DeltaSyncPlugin extends Plugin {
   async requestSync(interactive = true): Promise<void> {
     if (this.syncPromise) {
       if (interactive) new Notice("A Delta Sync operation is already running.");
+      else this.automaticSyncQueued = true;
       return this.syncPromise;
     }
     this.syncPromise = this.prepareAndRun(interactive).finally(() => {
       this.syncPromise = null;
+      if (this.automaticSyncQueued) {
+        this.automaticSyncQueued = false;
+        void this.requestSync(false);
+      }
     });
     return this.syncPromise;
   }

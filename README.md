@@ -58,7 +58,8 @@ The read-only token also enforces the role on GitHub.
 4. Store the appropriate fine-grained token in Obsidian Secret Storage.
 5. Test the connection.
 6. Preview and explicitly confirm the first sync.
-7. Enable automatic sync to run on startup, app foreground, and the configured interval.
+7. Enable automatic sync to run on startup, app foreground, after a short local-edit debounce on a
+   writer, and on the configured interval.
 
 The dedicated repository may start empty. Delta Sync initializes it with one real vault file, then
 constructs the remaining first-sync changes before atomically advancing the configured sync branch.

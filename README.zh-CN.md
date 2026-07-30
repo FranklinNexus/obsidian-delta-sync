@@ -17,7 +17,7 @@ Delta Sync 是一个面向 Obsidian 的 GitHub 增量同步插件。它不需要
 3. 在 Writer 的 Obsidian 设置中配置仓库所有者、仓库名、分支、设备名和读写 token。
 4. 使用 **Test connection** 测试连接，使用 **Preview** 检查首次同步，再确认同步。
 5. 在每台 Follower 上配置同一仓库与分支，选择 **Pull-only follower**，填入只读 token，并完成首次预览。
-6. 在需要自动同步的设备上打开 **Automatic sync**。它会在启动、回到前台和设定时间间隔时自动执行。
+6. 在需要自动同步的设备上打开 **Automatic sync**。它会在启动、回到前台、Writer 本地修改停止约 10 秒后以及设定时间间隔时自动执行。
 
 专用仓库可以保持为空。Delta Sync 会用一个真实 Vault 文件初始化仓库，再分批构造其余首次同步提交对象，最后一次性推进同步分支；其它设备不会看到半份 Vault。小型 UTF-8 笔记会在 Tree 请求中批量创建，大幅减少首次同步请求；二进制或较大的文件会并发上传到专用 GitHub Release，并在分支中只保留隐藏索引。索引不会写入 Vault，也不会在 Obsidian 中出现。
 
