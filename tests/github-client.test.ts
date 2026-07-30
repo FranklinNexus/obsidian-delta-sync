@@ -129,8 +129,11 @@ describe("GitHubClient", () => {
 
   it("initializes an empty repository with a real vault file before committing the remainder", async () => {
     const transport = new RecordingTransport([
+      ok({ default_branch: "main" }),
       failed(409, "Git Repository is empty."),
       created({ content: {}, commit: { sha: "head-initial" } }),
+      ok({ object: { sha: "head-initial" } }),
+      ok({}),
       ok({ object: { sha: "head-initial" } }),
       ok({ sha: "head-initial", tree: { sha: "tree-initial" } }),
       ok({
@@ -157,7 +160,7 @@ describe("GitHubClient", () => {
     const client = new GitHubClient({
       owner: "owner",
       repository: "repo",
-      branch: "main",
+      branch: "vault-sync",
       token: "secret",
       transport,
     });
@@ -180,7 +183,13 @@ describe("GitHubClient", () => {
     expect(JSON.parse(bootstrap?.body ?? "{}")).toMatchObject({
       message: "Sync",
       content: "Zmlyc3Q=",
-      branch: "main",
+    });
+    const branchCreation = transport.requests.find(
+      (request) => request.url.endsWith("/git/refs") && request.method === "POST",
+    );
+    expect(JSON.parse(branchCreation?.body ?? "{}")).toEqual({
+      ref: "refs/heads/vault-sync",
+      sha: "head-initial",
     });
     const secondBlob = transport.requests.find(
       (request) => request.url.endsWith("/git/blobs") && request.method === "POST",

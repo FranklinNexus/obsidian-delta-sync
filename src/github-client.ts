@@ -178,6 +178,10 @@ function parseBlob(value: unknown): GitHubBlob {
   };
 }
 
+function repositoryDefaultBranch(value: unknown): string {
+  return stringValue(objectValue(value, "repository").default_branch, "repository default branch");
+}
+
 export class GitHubClient implements RemoteRepository {
   private readonly transport: RequestTransport;
   private readonly apiRoot: string;
@@ -221,8 +225,8 @@ export class GitHubClient implements RemoteRepository {
     return response;
   }
 
-  private branchPath(): string {
-    return this.options.branch.split("/").map(encodeURIComponent).join("/");
+  private branchPath(branch = this.options.branch): string {
+    return branch.split("/").map(encodeURIComponent).join("/");
   }
 
   private contentsPath(path: string): string {
@@ -238,11 +242,11 @@ export class GitHubClient implements RemoteRepository {
     }
   }
 
-  private async getHead(): Promise<string | null> {
+  private async getHeadForBranch(branch: string): Promise<string | null> {
     try {
       const nonce = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
       const response = await this.request(
-        `/git/ref/heads/${this.branchPath()}?sync_nonce=${encodeURIComponent(nonce)}`,
+        `/git/ref/heads/${this.branchPath(branch)}?sync_nonce=${encodeURIComponent(nonce)}`,
       );
       return parseRef(response.json).object.sha;
     } catch (error) {
@@ -255,6 +259,14 @@ export class GitHubClient implements RemoteRepository {
       }
       throw error;
     }
+  }
+
+  private async getHead(): Promise<string | null> {
+    return this.getHeadForBranch(this.options.branch);
+  }
+
+  private async getDefaultBranch(): Promise<string> {
+    return repositoryDefaultBranch((await this.request("")).json);
   }
 
   async getSnapshot(knownState?: SyncState): Promise<RemoteSnapshot> {
@@ -321,6 +333,7 @@ export class GitHubClient implements RemoteRepository {
     message: string,
   ): Promise<CommitResult> {
     if (expectedHead === null) {
+      const defaultBranch = await this.getDefaultBranch();
       if ((await this.getHead()) !== null) {
         throw new GitHubApiError("Remote branch changed during sync; retry required", 409);
       }
@@ -336,8 +349,19 @@ export class GitHubClient implements RemoteRepository {
       await this.request(`/contents/${this.contentsPath(bootstrap.path)}`, "PUT", {
         message,
         content: bytesToBase64(bootstrap.bytes),
-        branch: this.options.branch,
       });
+      const defaultHead = await this.getHeadForBranch(defaultBranch);
+      if (defaultHead === null) {
+        throw new Error(
+          "GitHub did not create its default branch while initializing the repository",
+        );
+      }
+      if (defaultBranch !== this.options.branch) {
+        await this.request("/git/refs", "POST", {
+          ref: `refs/heads/${this.options.branch}`,
+          sha: defaultHead,
+        });
+      }
       const initialized = await this.getSnapshot();
       if (initialized.commitSha === null) {
         throw new Error("GitHub did not create a branch while initializing the empty repository");
