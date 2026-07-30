@@ -99,10 +99,7 @@ export type SyncDecisionKind =
   | "download-remote"
   | "delete-remote"
   | "delete-local"
-  | "follower-local-only"
-  | "follower-restore-remote"
-  | "follower-restore-deleted"
-  | "follower-preserve-before-delete"
+  | "follower-replace-remote"
   | "conflict-both-modified"
   | "conflict-local-modified-remote-deleted"
   | "conflict-local-deleted-remote-modified";

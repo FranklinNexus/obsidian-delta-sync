@@ -8,7 +8,7 @@ Delta Sync 是一个面向 Obsidian 的 GitHub 增量同步插件。它不需要
 
 手机、平板与其他电脑设为 **Pull-only follower**。Follower 使用另一个仅有 `Contents: Read-only` 权限的 token，只会拉取远端内容，无法创建 GitHub 提交或更新分支。插件限制和 GitHub 令牌权限共同避免从设备误推送。
 
-这种单 Writer 工作流不会产生 Git 冲突标记，也不会在 Vault 中留下 Git 元数据。不要在 Follower 上编辑笔记；若 Follower 上存在本地修改，插件会保留该内容为带 `sync-conflict-local` 后缀的副本，再恢复远端的规范版本，避免静默丢失内容。
+这种单 Writer 工作流不会产生 Git 冲突标记，也不会在 Vault 中留下 Git 元数据。不要在 Follower 上编辑笔记；首次同步或 Follower 发生本地修改时，插件会直接还原 Writer 的规范版本，不创建冲突副本；被替换的本地版本会移入 Obsidian 回收站，可自行恢复。
 
 ## 初次配置
 

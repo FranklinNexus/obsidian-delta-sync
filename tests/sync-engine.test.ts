@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SyncEngine } from "../src/sync-engine";
+import { summarizePlan, SyncEngine } from "../src/sync-engine";
 import {
   DEFAULT_SETTINGS,
   EMPTY_SYNC_STATE,
@@ -36,6 +36,18 @@ class ConcurrentReadRemote extends MemoryRemote {
 }
 
 describe("SyncEngine", () => {
+  it("reports a follower replacement as a download and local trash operation", () => {
+    const summary = summarizePlan({
+      baseCommitSha: "base",
+      remoteCommitSha: "remote",
+      decisions: [{ path: "note.md", kind: "follower-replace-remote" }],
+      skipped: [],
+      scanStats: { enumerated: 1, read: 1, reused: 0 },
+    });
+
+    expect(summary).toMatchObject({ downloaded: 1, deletedLocal: 1, conflicts: 0 });
+  });
+
   it("uploads from one device and downloads to another", async () => {
     const remote = new MemoryRemote();
     const deviceA = new MemoryVault({ "note.md": "hello" });
@@ -189,12 +201,31 @@ describe("SyncEngine", () => {
     });
 
     expect(result.summary.uploaded).toBe(0);
-    expect(result.summary.skipped).toBe(1);
+    expect(result.summary.deletedLocal).toBe(1);
     expect((await remote.getSnapshot()).files.size).toBe(0);
-    expect(follower.text("local-only.md")).toBe("draft");
+    expect(follower.text("local-only.md")).toBeUndefined();
+    expect(follower.trashed).toContain("local-only.md");
   });
 
-  it("preserves an accidental follower edit and restores the remote version", async () => {
+  it("uses the remote version for a follower's initial sync without a conflict copy", async () => {
+    const remote = new MemoryRemote();
+    await remote.seed({ "note.md": "remote canonical" });
+    const follower = new MemoryVault({ "note.md": "stale mobile copy" });
+
+    const result = await new SyncEngine(follower, remote, settings("phone", "follower")).run({
+      ...EMPTY_SYNC_STATE,
+      entries: {},
+    });
+
+    expect(result.summary.conflicts).toBe(0);
+    expect(result.summary.downloaded).toBe(1);
+    expect(result.summary.deletedLocal).toBe(1);
+    expect(follower.text("note.md")).toBe("remote canonical");
+    expect(follower.trashed).toContain("note.md");
+    expect([...follower.files.keys()].some((path) => path.includes("sync-conflict"))).toBe(false);
+  });
+
+  it("moves an accidental follower edit to the trash and restores the remote version", async () => {
     const remote = new MemoryRemote();
     await remote.seed({ "note.md": "remote base" });
     const follower = new MemoryVault({ "note.md": "remote base" });
@@ -206,17 +237,14 @@ describe("SyncEngine", () => {
     const result = await engine.run(baseline.nextState, baseline.nextLocalIndex);
 
     expect(result.summary.uploaded).toBe(0);
-    expect(result.summary.conflicts).toBe(1);
+    expect(result.summary.conflicts).toBe(0);
     expect(follower.text("note.md")).toBe("remote base");
-    const conflict = [...follower.files.keys()].find((path) =>
-      path.includes("sync-conflict-local"),
-    );
-    expect(conflict).toBeDefined();
-    expect(follower.text(conflict ?? "")).toBe("accidental local edit");
+    expect(follower.trashed).toContain("note.md");
+    expect([...follower.files.keys()].some((path) => path.includes("sync-conflict"))).toBe(false);
     expect((await remote.getSnapshot()).commitSha).toBe(remoteHead);
   });
 
-  it("preserves a follower edit before applying a remote deletion", async () => {
+  it("moves a follower edit to the trash before applying a remote deletion", async () => {
     const remote = new MemoryRemote();
     await remote.seed({ "note.md": "remote base" });
     const follower = new MemoryVault({ "note.md": "remote base" });
@@ -228,11 +256,8 @@ describe("SyncEngine", () => {
     const result = await engine.run(baseline.nextState, baseline.nextLocalIndex);
 
     expect(result.summary.uploaded).toBe(0);
-    expect(result.summary.conflicts).toBe(1);
+    expect(result.summary.conflicts).toBe(0);
     expect(follower.text("note.md")).toBeUndefined();
-    const conflict = [...follower.files.keys()].find((path) =>
-      path.includes("sync-conflict-local"),
-    );
-    expect(follower.text(conflict ?? "")).toBe("local edit");
+    expect(follower.trashed).toContain("note.md");
   });
 });

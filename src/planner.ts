@@ -30,6 +30,7 @@ export function buildSyncPlan(
   const decisions: SyncDecision[] = [];
   const planSkipped = [...skipped];
   const remoteSource = remoteCommitSha ? `github-${remoteCommitSha.slice(0, 7)}` : "remote";
+  const isFollower = deviceMode === "follower";
 
   for (const path of allPaths(base, local, remote)) {
     const baseSha = base.entries[path]?.blobSha;
@@ -47,18 +48,13 @@ export function buildSyncPlan(
     const remoteChanged = remoteSha !== baseSha;
 
     if (localChanged && !remoteChanged) {
-      if (deviceMode === "follower") {
+      if (isFollower) {
         if (localFile && remoteFile) {
-          decisions.push({
-            path,
-            kind: "follower-restore-remote",
-            conflictPath: conflictPath(path, "local", now),
-          });
+          decisions.push({ path, kind: "follower-replace-remote" });
         } else if (!localFile && remoteFile) {
-          decisions.push({ path, kind: "follower-restore-deleted" });
-        } else {
-          decisions.push({ path, kind: "follower-local-only" });
-          planSkipped.push(`${path} (local-only file on follower)`);
+          decisions.push({ path, kind: "download-remote" });
+        } else if (localFile) {
+          decisions.push({ path, kind: "delete-local" });
         }
         continue;
       }
@@ -72,12 +68,8 @@ export function buildSyncPlan(
     }
 
     if (localFile && remoteFile) {
-      if (deviceMode === "follower") {
-        decisions.push({
-          path,
-          kind: "follower-restore-remote",
-          conflictPath: conflictPath(path, "local", now),
-        });
+      if (isFollower) {
+        decisions.push({ path, kind: "follower-replace-remote" });
         continue;
       }
       decisions.push({
@@ -86,12 +78,8 @@ export function buildSyncPlan(
         conflictPath: conflictPath(path, remoteSource, now),
       });
     } else if (localFile) {
-      if (deviceMode === "follower") {
-        decisions.push({
-          path,
-          kind: "follower-preserve-before-delete",
-          conflictPath: conflictPath(path, "local", now),
-        });
+      if (isFollower) {
+        decisions.push({ path, kind: "delete-local" });
         continue;
       }
       decisions.push({
@@ -100,8 +88,8 @@ export function buildSyncPlan(
         conflictPath: conflictPath(path, "local", now),
       });
     } else if (remoteFile) {
-      if (deviceMode === "follower") {
-        decisions.push({ path, kind: "follower-restore-deleted" });
+      if (isFollower) {
+        decisions.push({ path, kind: "download-remote" });
         continue;
       }
       decisions.push({

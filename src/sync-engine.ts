@@ -170,8 +170,6 @@ export class SyncEngine {
           }
           break;
         }
-        case "follower-local-only":
-          break;
         case "upload-local":
           mutations.push({
             path: decision.path,
@@ -191,39 +189,17 @@ export class SyncEngine {
           await this.localVault.trash(decision.path);
           summary.deletedLocal += 1;
           break;
-        case "follower-restore-remote": {
-          if (!decision.conflictPath) throw new Error("Conflict path is missing");
+        case "follower-replace-remote": {
           const remoteFile = this.remoteFile(remote, decision.path);
-          const [localContent, remoteContent] = await Promise.all([
-            this.localBytes(local, decision.path),
-            this.remoteRepository.readBlob(remoteFile),
-          ]);
-          await this.localVault.write(decision.conflictPath, localContent);
-          await this.localVault.write(decision.path, remoteContent);
-          summary.downloaded += 1;
-          summary.conflicts += 1;
-          break;
-        }
-        case "follower-restore-deleted": {
-          const remoteFile = this.remoteFile(remote, decision.path);
+          await this.localVault.trash(decision.path);
           await this.localVault.write(
             decision.path,
             await this.remoteRepository.readBlob(remoteFile),
           );
           summary.downloaded += 1;
-          summary.conflicts += 1;
+          summary.deletedLocal += 1;
           break;
         }
-        case "follower-preserve-before-delete":
-          if (!decision.conflictPath) throw new Error("Conflict path is missing");
-          await this.localVault.write(
-            decision.conflictPath,
-            await this.localBytes(local, decision.path),
-          );
-          await this.localVault.trash(decision.path);
-          summary.deletedLocal += 1;
-          summary.conflicts += 1;
-          break;
         case "conflict-both-modified": {
           if (!decision.conflictPath) throw new Error("Conflict path is missing");
           const remoteFile = this.remoteFile(remote, decision.path);
@@ -346,6 +322,10 @@ export function summarizePlan(plan: SyncPlan): SyncSummary {
       case "delete-local":
         summary.deletedLocal += 1;
         break;
+      case "follower-replace-remote":
+        summary.downloaded += 1;
+        summary.deletedLocal += 1;
+        break;
       case "delete-remote":
         summary.deletedRemote += 1;
         break;
@@ -364,20 +344,7 @@ export function summarizePlan(plan: SyncPlan): SyncSummary {
         summary.deletedRemote += 1;
         summary.conflicts += 1;
         break;
-      case "follower-restore-remote":
-        summary.downloaded += 1;
-        summary.conflicts += 1;
-        break;
-      case "follower-restore-deleted":
-        summary.downloaded += 1;
-        summary.conflicts += 1;
-        break;
-      case "follower-preserve-before-delete":
-        summary.deletedLocal += 1;
-        summary.conflicts += 1;
-        break;
       case "noop":
-      case "follower-local-only":
         break;
     }
   }

@@ -65,11 +65,11 @@ describe("buildSyncPlan", () => {
   });
 
   it.each([
-    ["local edit", "b", "l", "b", "follower-restore-remote"],
-    ["local delete", "b", undefined, "b", "follower-restore-deleted"],
-    ["both edit", "b", "l", "r", "follower-restore-remote"],
-    ["local edit remote delete", "b", "l", undefined, "follower-preserve-before-delete"],
-    ["local-only first sync", undefined, "l", undefined, "follower-local-only"],
+    ["local edit", "b", "l", "b", "follower-replace-remote"],
+    ["local delete", "b", undefined, "b", "download-remote"],
+    ["both edit", "b", "l", "r", "follower-replace-remote"],
+    ["local edit remote delete", "b", "l", undefined, "delete-local"],
+    ["local-only first sync", undefined, "l", undefined, "delete-local"],
   ])(
     "plans follower %s without remote mutations",
     (_name, baseSha, localSha, remoteSha, expected) => {
@@ -90,4 +90,31 @@ describe("buildSyncPlan", () => {
       expect(plan.decisions.some((decision) => decision.kind === "delete-remote")).toBe(false);
     },
   );
+
+  it("uses the remote snapshot on a follower's first sync", () => {
+    const plan = buildSyncPlan(
+      { baseCommitSha: null, entries: {} },
+      new Map([
+        ["local-only.md", local("local-only.md", "l")],
+        ["same.md", local("same.md", "s")],
+        ["shared.md", local("shared.md", "l2")],
+      ]),
+      "remote-head",
+      new Map([
+        ["remote-only.md", remote("remote-only.md", "r")],
+        ["same.md", remote("same.md", "s")],
+        ["shared.md", remote("shared.md", "r2")],
+      ]),
+      [],
+      new Date("2026-07-23T00:00:00.000Z"),
+      "follower",
+    );
+
+    expect(Object.fromEntries(plan.decisions.map((item) => [item.path, item.kind]))).toEqual({
+      "local-only.md": "delete-local",
+      "remote-only.md": "download-remote",
+      "same.md": "noop",
+      "shared.md": "follower-replace-remote",
+    });
+  });
 });

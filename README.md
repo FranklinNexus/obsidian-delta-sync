@@ -41,8 +41,8 @@ Use a fine-grained GitHub token restricted to the selected repository with:
 ### Pull-only follower
 
 A follower never creates commits or updates a Git reference. Remote content is authoritative.
-If a follower file was edited locally, Delta Sync saves that version as a timestamped
-`sync-conflict-local` copy before restoring or deleting the canonical path.
+On initial sync and after an accidental follower edit, the writer's version is restored without
+creating a conflict file. The displaced local version is moved to Obsidian's trash for recovery.
 
 Use a fine-grained GitHub token restricted to the selected repository with:
 

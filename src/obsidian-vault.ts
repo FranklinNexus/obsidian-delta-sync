@@ -4,6 +4,7 @@ import { gitBlobSha, normalizeVaultPath, sha256, shouldExclude } from "./utils";
 
 export class ObsidianVaultAdapter implements LocalVault {
   private readonly dirtyPaths = new Set<string>();
+  private readonly pendingFolderCreations = new Map<string, Promise<void>>();
 
   constructor(
     private readonly vault: Vault,
@@ -95,7 +96,30 @@ export class ObsidianVaultAdapter implements LocalVault {
     let current = "";
     for (const segment of segments) {
       current = current ? `${current}/${segment}` : segment;
-      if (this.vault.getFolderByPath(current) === null) await this.vault.createFolder(current);
+      if (this.vault.getFolderByPath(current) !== null) continue;
+
+      const existingCreation = this.pendingFolderCreations.get(current);
+      if (existingCreation) {
+        await existingCreation;
+        continue;
+      }
+
+      const creation = this.vault
+        .createFolder(current)
+        .then(() => undefined)
+        .catch((error: unknown) => {
+          if (this.vault.getFolderByPath(current) !== null) return;
+          throw error;
+        });
+      this.pendingFolderCreations.set(current, creation);
+
+      try {
+        await creation;
+      } finally {
+        if (this.pendingFolderCreations.get(current) === creation) {
+          this.pendingFolderCreations.delete(current);
+        }
+      }
     }
   }
 
