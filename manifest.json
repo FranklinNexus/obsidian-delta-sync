@@ -1,7 +1,7 @@
 {
   "id": "delta-sync",
   "name": "Delta Sync",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "minAppVersion": "1.12.7",
   "description": "Incremental GitHub sync with writer and pull-only device roles.",
   "author": "FranklinNexus",

@@ -101,8 +101,16 @@ interface GitHubBlob {
 }
 
 const BLOB_UPLOAD_CONCURRENCY = 1;
-const BLOB_UPLOAD_INTERVAL_MS = 800;
+const BLOB_UPLOAD_INTERVAL_MS = 1_250;
+const BLOB_UPLOAD_MAX_ATTEMPTS = 5;
 const SECONDARY_RATE_LIMIT_COOLDOWN_MS = 60_000;
+const TRANSIENT_ERROR_INITIAL_COOLDOWN_MS = 15_000;
+const TRANSIENT_ERROR_MAX_COOLDOWN_MS = 120_000;
+const MAX_MUTATIONS_PER_TRANSACTION_COMMIT = 100;
+
+function pause(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => globalThis.setTimeout(resolve, milliseconds));
+}
 
 async function mapWithConcurrency<T, R>(
   values: T[],
@@ -327,15 +335,39 @@ export class GitHubClient implements RemoteRepository {
     const scheduledAt = Math.max(now, this.nextBlobUploadAt);
     this.nextBlobUploadAt = scheduledAt + BLOB_UPLOAD_INTERVAL_MS;
     const delay = scheduledAt - now;
-    if (delay > 0) await new Promise((resolve) => window.setTimeout(resolve, delay));
+    if (delay > 0) await pause(delay);
   }
 
   private isSecondaryRateLimit(error: unknown): error is GitHubApiError {
     return error instanceof GitHubApiError && /secondary rate limit/iu.test(error.message);
   }
 
+  private isRetryableBlobUploadError(error: unknown): boolean {
+    if (error instanceof GitHubApiError) {
+      return (
+        error.status === 408 ||
+        error.status === 429 ||
+        error.status >= 500 ||
+        /couldn't respond to your request in time|timeout|temporarily unavailable/iu.test(
+          error.message,
+        )
+      );
+    }
+    return (
+      error instanceof Error && /network|timeout|temporarily unavailable/iu.test(error.message)
+    );
+  }
+
+  private blobRetryCooldown(error: unknown, attempt: number): number {
+    if (this.isSecondaryRateLimit(error)) return SECONDARY_RATE_LIMIT_COOLDOWN_MS;
+    return Math.min(
+      TRANSIENT_ERROR_INITIAL_COOLDOWN_MS * 2 ** attempt,
+      TRANSIENT_ERROR_MAX_COOLDOWN_MS,
+    );
+  }
+
   private async createBlob(bytes: Uint8Array): Promise<string> {
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    for (let attempt = 0; attempt < BLOB_UPLOAD_MAX_ATTEMPTS; attempt += 1) {
       await this.waitForBlobUploadSlot();
       try {
         const response = await this.request("/git/blobs", "POST", {
@@ -344,14 +376,59 @@ export class GitHubClient implements RemoteRepository {
         });
         return stringValue(objectValue(response.json, "created blob").sha, "created blob sha");
       } catch (error) {
-        if (attempt === 2 || !this.isSecondaryRateLimit(error)) throw error;
+        if (attempt === BLOB_UPLOAD_MAX_ATTEMPTS - 1 || !this.isRetryableBlobUploadError(error)) {
+          throw error;
+        }
         this.nextBlobUploadAt = Math.max(
           this.nextBlobUploadAt,
-          Date.now() + SECONDARY_RATE_LIMIT_COOLDOWN_MS,
+          Date.now() + this.blobRetryCooldown(error, attempt),
         );
       }
     }
     throw new Error("Blob upload retry limit was reached");
+  }
+
+  private async createCommitObject(
+    parentCommit: string,
+    baseTree: string,
+    mutations: RemoteMutation[],
+    message: string,
+  ): Promise<{ commitSha: string; treeSha: string }> {
+    const entries = await mapWithConcurrency(
+      mutations,
+      BLOB_UPLOAD_CONCURRENCY,
+      async (mutation): Promise<Record<string, unknown>> => {
+        if (mutation.kind === "delete") {
+          return { path: mutation.path, mode: "100644", type: "blob", sha: null };
+        }
+        if (mutation.kind === "reuse") {
+          return { path: mutation.path, mode: "100644", type: "blob", sha: mutation.sha };
+        }
+        const sha = await this.createBlob(mutation.bytes);
+        return { path: mutation.path, mode: "100644", type: "blob", sha };
+      },
+    );
+
+    const treeResponse = await this.request("/git/trees", "POST", {
+      tree: entries,
+      base_tree: baseTree,
+    });
+    const treeSha = stringValue(
+      objectValue(treeResponse.json, "created tree").sha,
+      "created tree sha",
+    );
+    const commitResponse = await this.request("/git/commits", "POST", {
+      message,
+      tree: treeSha,
+      parents: [parentCommit],
+    });
+    return {
+      commitSha: stringValue(
+        objectValue(commitResponse.json, "created commit").sha,
+        "created commit sha",
+      ),
+      treeSha,
+    };
   }
 
   async commit(
@@ -405,56 +482,36 @@ export class GitHubClient implements RemoteRepository {
     if (currentHead !== expectedHead) {
       throw new GitHubApiError("Remote branch changed during sync; retry required", 409);
     }
+    if (mutations.length === 0) {
+      return { commitSha: expectedHead, snapshot: await this.getSnapshot() };
+    }
 
     const baseCommitResponse = await this.request(
       `/git/commits/${encodeURIComponent(expectedHead)}`,
     );
-    const baseTree = parseCommit(baseCommitResponse.json).tree.sha;
-
-    const entries = await mapWithConcurrency(
-      mutations,
-      BLOB_UPLOAD_CONCURRENCY,
-      async (mutation): Promise<Record<string, unknown>> => {
-        if (mutation.kind === "delete") {
-          return { path: mutation.path, mode: "100644", type: "blob", sha: null };
-        }
-        if (mutation.kind === "reuse") {
-          return { path: mutation.path, mode: "100644", type: "blob", sha: mutation.sha };
-        }
-        const sha = await this.createBlob(mutation.bytes);
-        return { path: mutation.path, mode: "100644", type: "blob", sha };
-      },
-    );
-
-    if (entries.length === 0) {
-      return { commitSha: expectedHead, snapshot: await this.getSnapshot() };
+    let parentCommit = expectedHead;
+    let baseTree = parseCommit(baseCommitResponse.json).tree.sha;
+    for (let index = 0; index < mutations.length; index += MAX_MUTATIONS_PER_TRANSACTION_COMMIT) {
+      const created = await this.createCommitObject(
+        parentCommit,
+        baseTree,
+        mutations.slice(index, index + MAX_MUTATIONS_PER_TRANSACTION_COMMIT),
+        message,
+      );
+      parentCommit = created.commitSha;
+      baseTree = created.treeSha;
     }
 
-    const treeResponse = await this.request("/git/trees", "POST", {
-      tree: entries,
-      base_tree: baseTree,
-    });
-    const treeSha = stringValue(
-      objectValue(treeResponse.json, "created tree").sha,
-      "created tree sha",
-    );
-
-    const commitBody: Record<string, unknown> = {
-      message,
-      tree: treeSha,
-      parents: [expectedHead],
-    };
-    const commitResponse = await this.request("/git/commits", "POST", commitBody);
-    const commitSha = stringValue(
-      objectValue(commitResponse.json, "created commit").sha,
-      "created commit sha",
-    );
+    // Create all objects first. The sync branch advances once, so other devices never observe a partial tree.
+    if ((await this.getHead()) !== expectedHead) {
+      throw new GitHubApiError("Remote branch changed during sync; retry required", 409);
+    }
 
     await this.request(`/git/refs/heads/${this.branchPath()}`, "PATCH", {
-      sha: commitSha,
+      sha: parentCommit,
       force: false,
     });
 
-    return { commitSha, snapshot: await this.getSnapshotAt(commitSha) };
+    return { commitSha: parentCommit, snapshot: await this.getSnapshotAt(parentCommit) };
   }
 }

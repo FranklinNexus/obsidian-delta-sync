@@ -24,8 +24,11 @@ copyright notice are retained.
 
 ### Writer
 
-A writer uploads local changes, pulls remote changes, and creates one atomic Git commit per sync.
-The branch head is checked before every commit and force pushes are never used.
+A writer uploads local changes, pulls remote changes, and advances the sync branch atomically.
+Large first syncs construct a short private commit chain in batches before the branch moves, so
+other devices never observe a partial tree. The branch head is checked before the update and
+force pushes are never used. Blob uploads are paced and transient GitHub errors retry with
+backoff.
 
 Use a fine-grained GitHub token restricted to the selected repository with:
 
@@ -54,7 +57,8 @@ The read-only token also enforces the role on GitHub.
 7. Enable automatic sync to run on startup, app foreground, and the configured interval.
 
 The dedicated repository may start empty. Delta Sync initializes it with one real vault file, then
-commits the remaining first-sync changes without adding marker or control files to the vault.
+constructs the remaining first-sync changes before atomically advancing the configured sync branch,
+without adding marker or control files to the vault.
 
 Do not run another tool that writes the same vault files. `.obsidian`, `.trash`, `.git`, oversized
 files, and custom glob patterns are excluded. Remote deletions use the Obsidian trash.

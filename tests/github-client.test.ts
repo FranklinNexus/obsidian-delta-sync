@@ -146,6 +146,7 @@ describe("GitHubClient", () => {
       created({ sha: "blob-second" }),
       created({ sha: "tree-final" }),
       created({ sha: "head-final" }),
+      ok({ object: { sha: "head-initial" } }),
       ok({}),
       ok({ sha: "head-final", tree: { sha: "tree-final" } }),
       ok({
@@ -211,13 +212,14 @@ describe("GitHubClient", () => {
     expect(transport.requests[0]?.headers.Accept).toBe("application/vnd.github.raw+json");
   });
 
-  it("creates one commit and updates the branch without force", async () => {
+  it("updates the branch without force after creating a commit", async () => {
     const transport = new RecordingTransport([
       ok({ object: { sha: "head-1" } }),
       ok({ sha: "head-1", tree: { sha: "tree-1" } }),
       created({ sha: "blob-new" }),
       created({ sha: "tree-new" }),
       created({ sha: "head-2" }),
+      ok({ object: { sha: "head-1" } }),
       ok({ object: { sha: "head-2" } }),
       ok({ sha: "head-2", tree: { sha: "tree-new" } }),
       ok({
@@ -245,6 +247,82 @@ describe("GitHubClient", () => {
     expect(
       transport.requests.filter((request) => request.url.endsWith("/git/commits")),
     ).toHaveLength(1);
+  });
+
+  it("retries a transient blob upload failure with backoff", async () => {
+    vi.stubGlobal("setTimeout", (callback: () => void) => {
+      callback();
+      return 0;
+    });
+    const transport = new RecordingTransport([
+      ok({ object: { sha: "head-1" } }),
+      ok({ sha: "head-1", tree: { sha: "tree-1" } }),
+      failed(500, "We couldn't respond to your request in time."),
+      created({ sha: "blob-new" }),
+      created({ sha: "tree-new" }),
+      created({ sha: "head-2" }),
+      ok({ object: { sha: "head-1" } }),
+      ok({}),
+      ok({ sha: "head-2", tree: { sha: "tree-new" } }),
+      ok({ sha: "tree-new", truncated: false, tree: [] }),
+    ]);
+    const client = new GitHubClient({
+      owner: "owner",
+      repository: "repo",
+      branch: "main",
+      token: "secret",
+      transport,
+    });
+
+    await expect(
+      client.commit(
+        "head-1",
+        [{ path: "note.md", kind: "put", bytes: new TextEncoder().encode("hello") }],
+        "Sync",
+      ),
+    ).resolves.toMatchObject({ commitSha: "head-2" });
+    expect(transport.requests.filter((request) => request.url.endsWith("/git/blobs"))).toHaveLength(
+      2,
+    );
+    vi.unstubAllGlobals();
+  });
+
+  it("builds large syncs in batches before advancing the branch", async () => {
+    const transport = new RecordingTransport([
+      ok({ object: { sha: "head-1" } }),
+      ok({ sha: "head-1", tree: { sha: "tree-1" } }),
+      created({ sha: "tree-2" }),
+      created({ sha: "head-2" }),
+      created({ sha: "tree-3" }),
+      created({ sha: "head-3" }),
+      ok({ object: { sha: "head-1" } }),
+      ok({}),
+      ok({ sha: "head-3", tree: { sha: "tree-3" } }),
+      ok({ sha: "tree-3", truncated: false, tree: [] }),
+    ]);
+    const client = new GitHubClient({
+      owner: "owner",
+      repository: "repo",
+      branch: "main",
+      token: "secret",
+      transport,
+    });
+    const mutations = Array.from({ length: 101 }, (_, index) => ({
+      path: `note-${index}.md`,
+      kind: "reuse" as const,
+      sha: `blob-${index}`,
+    }));
+
+    await expect(client.commit("head-1", mutations, "Sync")).resolves.toMatchObject({
+      commitSha: "head-3",
+    });
+    const commitIndexes = transport.requests
+      .map((request, index) => ({ request, index }))
+      .filter(({ request }) => request.url.endsWith("/git/commits") && request.method === "POST")
+      .map(({ index }) => index);
+    const refUpdateIndex = transport.requests.findIndex((request) => request.method === "PATCH");
+    expect(commitIndexes).toHaveLength(2);
+    expect(refUpdateIndex).toBeGreaterThan(commitIndexes[1] ?? -1);
   });
 
   it("rejects a stale expected branch head before uploading blobs", async () => {
