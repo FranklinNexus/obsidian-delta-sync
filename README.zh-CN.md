@@ -30,6 +30,7 @@ Delta Sync 是一个面向 Obsidian 的 GitHub 增量同步插件。它不需要
 - 默认最大单文件 25 MB，最高可设置为 100 MB。
 - `.obsidian`、`.trash`、`.git`、超过大小限制的文件和自定义排除规则不会上传。
 - 同步只在 Obsidian 打开时运行。iOS 和 Android 不保证应用完全关闭后的定时后台执行。
+- Android 端会自动在 Vault 根目录创建本地 `.nomedia` 标记，避免系统相册、微信图片选择器把 Obsidian 附件全部当成照片扫出来。
 
 ## 隐私
 

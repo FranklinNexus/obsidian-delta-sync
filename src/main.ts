@@ -14,6 +14,7 @@ import { errorMessage } from "./utils";
 
 const MAX_LOGS = 50;
 const LOCAL_CHANGE_SYNC_DEBOUNCE_MS = 10_000;
+const ANDROID_NOMEDIA_MARKER = ".nomedia";
 
 function getOSName(): string {
   if (Platform.isMacOS) return "macos";
@@ -35,6 +36,7 @@ export default class DeltaSyncPlugin extends Plugin {
 
   async onload(): Promise<void> {
     await this.loadPluginData();
+    await this.ensureAndroidNoMediaMarker();
     this.localVault = new ObsidianVaultAdapter(this.app.vault, this.app);
     this.statusBar = this.addStatusBarItem();
     this.setStatus("idle", "Delta Sync: idle");
@@ -116,6 +118,13 @@ export default class DeltaSyncPlugin extends Plugin {
 
   async persistData(): Promise<void> {
     await this.saveData(this.data);
+  }
+
+  private async ensureAndroidNoMediaMarker(): Promise<void> {
+    if (!Platform.isAndroidApp) return;
+    const adapter = this.app.vault.adapter;
+    if (await adapter.exists(ANDROID_NOMEDIA_MARKER)) return;
+    await adapter.write(ANDROID_NOMEDIA_MARKER, "");
   }
 
   private secretId(): string {

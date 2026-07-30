@@ -124,6 +124,7 @@ const DEFAULT_EXCLUDES = [
   ".obsidian/**",
   ".trash/**",
   ".git/**",
+  ".nomedia",
   ".delta-sync-assets.json",
   ".delta-sync-test-marker",
   "**/.DS_Store",
