@@ -1,12 +1,12 @@
 import { buildSyncPlan } from "./planner";
 import type {
-  BaseEntry,
   LocalFileSnapshot,
   LocalIndex,
   LocalVault,
   RemoteFileSnapshot,
   RemoteMutation,
   RemoteRepository,
+  RemoteStateEntry,
   RemoteSnapshot,
   SyncPlan,
   SyncRunResult,
@@ -14,7 +14,7 @@ import type {
   SyncState,
   SyncSummary,
 } from "./types";
-import { shouldExclude } from "./utils";
+import { mayNeedReleaseAsset, needsReleaseAsset, shouldExclude } from "./utils";
 
 export interface PreviewResult {
   plan: SyncPlan;
@@ -142,16 +142,34 @@ export class SyncEngine {
     const downloads = plan.decisions.filter((decision) => decision.kind === "download-remote");
     await forEachWithConcurrency(downloads, DOWNLOAD_CONCURRENCY, async (decision) => {
       const remoteFile = this.remoteFile(remote, decision.path);
-      await this.localVault.write(
-        decision.path,
-        await this.remoteRepository.readBlob(remoteFile.sha),
-      );
+      await this.localVault.write(decision.path, await this.remoteRepository.readBlob(remoteFile));
     });
     summary.downloaded += downloads.length;
 
     for (const decision of plan.decisions) {
       switch (decision.kind) {
-        case "noop":
+        case "noop": {
+          // Existing Git blob-backed binary files are migrated on the first run after upgrade.
+          // The branch is not advanced until their Release Assets and manifest are all ready.
+          const remoteFile = this.remoteFile(remote, decision.path);
+          if (
+            this.settings.deviceMode === "writer" &&
+            !remoteFile.asset &&
+            mayNeedReleaseAsset(decision.path, remoteFile.size)
+          ) {
+            const localBytes = await this.localBytes(local, decision.path);
+            if (needsReleaseAsset(localBytes)) {
+              mutations.push({
+                path: decision.path,
+                kind: "put",
+                bytes: localBytes,
+                sha: this.localFile(local, decision.path).gitSha,
+              });
+              summary.uploaded += 1;
+            }
+          }
+          break;
+        }
         case "follower-local-only":
           break;
         case "upload-local":
@@ -159,6 +177,7 @@ export class SyncEngine {
             path: decision.path,
             kind: "put",
             bytes: await this.localBytes(local, decision.path),
+            sha: this.localFile(local, decision.path).gitSha,
           });
           summary.uploaded += 1;
           break;
@@ -177,7 +196,7 @@ export class SyncEngine {
           const remoteFile = this.remoteFile(remote, decision.path);
           const [localContent, remoteContent] = await Promise.all([
             this.localBytes(local, decision.path),
-            this.remoteRepository.readBlob(remoteFile.sha),
+            this.remoteRepository.readBlob(remoteFile),
           ]);
           await this.localVault.write(decision.conflictPath, localContent);
           await this.localVault.write(decision.path, remoteContent);
@@ -189,7 +208,7 @@ export class SyncEngine {
           const remoteFile = this.remoteFile(remote, decision.path);
           await this.localVault.write(
             decision.path,
-            await this.remoteRepository.readBlob(remoteFile.sha),
+            await this.remoteRepository.readBlob(remoteFile),
           );
           summary.downloaded += 1;
           summary.conflicts += 1;
@@ -210,14 +229,21 @@ export class SyncEngine {
           const remoteFile = this.remoteFile(remote, decision.path);
           await this.localVault.write(
             decision.conflictPath,
-            await this.remoteRepository.readBlob(remoteFile.sha),
+            await this.remoteRepository.readBlob(remoteFile),
           );
           mutations.push({
             path: decision.path,
             kind: "put",
             bytes: await this.localBytes(local, decision.path),
+            sha: this.localFile(local, decision.path).gitSha,
           });
-          mutations.push({ path: decision.conflictPath, kind: "reuse", sha: remoteFile.sha });
+          mutations.push({
+            path: decision.conflictPath,
+            kind: "reuse",
+            sha: remoteFile.sha,
+            size: remoteFile.size,
+            ...(remoteFile.asset ? { asset: remoteFile.asset } : {}),
+          });
           summary.uploaded += 2;
           summary.downloaded += 1;
           summary.conflicts += 1;
@@ -228,7 +254,12 @@ export class SyncEngine {
           const localContent = await this.localBytes(local, decision.path);
           await this.localVault.trash(decision.path);
           await this.localVault.write(decision.conflictPath, localContent);
-          mutations.push({ path: decision.conflictPath, kind: "put", bytes: localContent });
+          mutations.push({
+            path: decision.conflictPath,
+            kind: "put",
+            bytes: localContent,
+            sha: this.localFile(local, decision.path).gitSha,
+          });
           summary.uploaded += 1;
           summary.deletedLocal += 1;
           summary.conflicts += 1;
@@ -239,10 +270,16 @@ export class SyncEngine {
           const remoteFile = this.remoteFile(remote, decision.path);
           await this.localVault.write(
             decision.conflictPath,
-            await this.remoteRepository.readBlob(remoteFile.sha),
+            await this.remoteRepository.readBlob(remoteFile),
           );
           mutations.push({ path: decision.path, kind: "delete" });
-          mutations.push({ path: decision.conflictPath, kind: "reuse", sha: remoteFile.sha });
+          mutations.push({
+            path: decision.conflictPath,
+            kind: "reuse",
+            sha: remoteFile.sha,
+            size: remoteFile.size,
+            ...(remoteFile.asset ? { asset: remoteFile.asset } : {}),
+          });
           summary.downloaded += 1;
           summary.deletedRemote += 1;
           summary.conflicts += 1;
@@ -272,7 +309,7 @@ export class SyncEngine {
       prepared.localIndex,
     );
     summary.localFilesRead += finalLocal.stats.read;
-    const entries: Record<string, BaseEntry> = {};
+    const entries: Record<string, RemoteStateEntry> = {};
     for (const [path, remoteFile] of finalRemote.files) {
       const localFile = finalLocal.files.get(path);
       if (localFile?.gitSha !== remoteFile.sha) {
@@ -282,6 +319,7 @@ export class SyncEngine {
         blobSha: remoteFile.sha,
         sha256: localFile.sha256,
         size: localFile.size,
+        ...(remoteFile.asset ? { asset: remoteFile.asset } : {}),
       };
     }
 

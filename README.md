@@ -20,6 +20,8 @@ copyright notice are retained.
 - If the branch changed, only tree metadata is fetched and only changed blobs are downloaded.
 - Blob downloads use raw bytes instead of a base64 text copy.
 - Initial and large follower pulls download independent files with four bounded workers.
+- Binary files and large text files use private GitHub Release Assets. The sync branch contains only
+  normal small UTF-8 files plus a hidden asset index, so attachments do not create a large Git history.
 
 ## Device roles
 
@@ -27,10 +29,10 @@ copyright notice are retained.
 
 A writer uploads local changes, pulls remote changes, and advances the sync branch atomically.
 Large first syncs construct a short private commit chain in batches before the branch moves, so
-other devices never observe a partial tree. Small UTF-8 notes are created inline in those Tree
-requests, reducing first-sync API calls dramatically; binary and large files keep paced blob
-uploads with transient-error backoff. The branch head is checked before the update and force
-pushes are never used.
+other devices never observe a partial tree. Small UTF-8 notes are created inline in Tree requests.
+Binary and large files are uploaded with bounded concurrency to a dedicated GitHub Release, then a
+hidden index is committed with the normal files. The branch head is checked before the update and
+force pushes are never used.
 
 Use a fine-grained GitHub token restricted to the selected repository with:
 
@@ -59,8 +61,8 @@ The read-only token also enforces the role on GitHub.
 7. Enable automatic sync to run on startup, app foreground, and the configured interval.
 
 The dedicated repository may start empty. Delta Sync initializes it with one real vault file, then
-constructs the remaining first-sync changes before atomically advancing the configured sync branch,
-without adding marker or control files to the vault.
+constructs the remaining first-sync changes before atomically advancing the configured sync branch.
+Its hidden Release Asset index is never created inside the Vault.
 
 Do not run another tool that writes the same vault files. `.obsidian`, `.trash`, `.git`, oversized
 files, and custom glob patterns are excluded. Remote deletions use the Obsidian trash.
@@ -69,6 +71,8 @@ files, and custom glob patterns are excluded. Remote deletions use the Obsidian 
 
 - GitHub repositories only.
 - Default maximum file size: 25 MB. Configurable up to the GitHub hard limit of 100 MB.
+- The GitHub branch is not a complete attachment browser: attachments and large files are stored as
+  Release Assets and recovered through Obsidian using the hidden index.
 - First sync must read or download every included file once.
 - Synchronization is periodic, not real-time.
 - Rename operations are represented as create plus delete.

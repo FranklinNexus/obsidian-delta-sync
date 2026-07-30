@@ -1,5 +1,66 @@
 const encoder = new TextEncoder();
 
+export const MAX_INLINE_TREE_CONTENT_BYTES = 256 * 1024;
+
+export function inlineTreeContent(bytes: Uint8Array): string | null {
+  if (bytes.byteLength > MAX_INLINE_TREE_CONTENT_BYTES || bytes.includes(0)) return null;
+  try {
+    const content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+    const encoded = encoder.encode(content);
+    if (encoded.byteLength !== bytes.byteLength) return null;
+    for (let index = 0; index < bytes.byteLength; index += 1) {
+      if (encoded[index] !== bytes[index]) return null;
+    }
+    return content;
+  } catch {
+    return null;
+  }
+}
+
+export function needsReleaseAsset(bytes: Uint8Array): boolean {
+  return inlineTreeContent(bytes) === null;
+}
+
+const RELEASE_ASSET_EXTENSIONS = new Set([
+  "7z",
+  "avi",
+  "bmp",
+  "doc",
+  "docx",
+  "fig",
+  "flac",
+  "gif",
+  "heic",
+  "ico",
+  "jpeg",
+  "jpg",
+  "m4a",
+  "mkv",
+  "mov",
+  "mp3",
+  "mp4",
+  "ogg",
+  "pdf",
+  "png",
+  "ppt",
+  "pptx",
+  "rar",
+  "tif",
+  "tiff",
+  "wav",
+  "webm",
+  "webp",
+  "xls",
+  "xlsx",
+  "zip",
+]);
+
+export function mayNeedReleaseAsset(path: string, size: number): boolean {
+  if (size > MAX_INLINE_TREE_CONTENT_BYTES) return true;
+  const extension = path.split(".").at(-1)?.toLowerCase();
+  return extension !== undefined && RELEASE_ASSET_EXTENSIONS.has(extension);
+}
+
 export function bytesToBase64(bytes: Uint8Array): string {
   let binary = "";
   const chunkSize = 0x8000;
@@ -61,6 +122,7 @@ const DEFAULT_EXCLUDES = [
   ".obsidian/**",
   ".trash/**",
   ".git/**",
+  ".delta-sync-assets.json",
   ".delta-sync-test-marker",
   "**/.DS_Store",
   "**/*.sync-conflict-*.tmp",

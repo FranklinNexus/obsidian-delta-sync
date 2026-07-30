@@ -6,6 +6,7 @@ import {
   type DeviceMode,
   type SyncSettings,
 } from "../src/types";
+import type { RemoteFileSnapshot } from "../src/types";
 import { MemoryRemote, MemoryVault } from "./helpers";
 
 function settings(deviceName: string, deviceMode: DeviceMode = "writer"): SyncSettings {
@@ -22,12 +23,12 @@ class ConcurrentReadRemote extends MemoryRemote {
   activeReads = 0;
   peakReads = 0;
 
-  override async readBlob(sha: string): Promise<Uint8Array> {
+  override async readBlob(file: RemoteFileSnapshot): Promise<Uint8Array> {
     this.activeReads += 1;
     this.peakReads = Math.max(this.peakReads, this.activeReads);
     try {
       await new Promise((resolve) => setTimeout(resolve, 5));
-      return await super.readBlob(sha);
+      return await super.readBlob(file);
     } finally {
       this.activeReads -= 1;
     }

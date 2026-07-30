@@ -22,6 +22,16 @@ export interface BaseEntry {
   size: number;
 }
 
+export interface ReleaseAssetReference {
+  releaseId: number;
+  assetId: number;
+  name: string;
+}
+
+export interface RemoteStateEntry extends BaseEntry {
+  asset?: ReleaseAssetReference;
+}
+
 export interface LocalIndexEntry extends BaseEntry {
   mtime: number;
 }
@@ -30,7 +40,7 @@ export type LocalIndex = Record<string, LocalIndexEntry>;
 
 export interface SyncState {
   baseCommitSha: string | null;
-  entries: Record<string, BaseEntry>;
+  entries: Record<string, RemoteStateEntry>;
 }
 
 export interface SyncLogEntry {
@@ -74,6 +84,7 @@ export interface RemoteFileSnapshot {
   path: string;
   sha: string;
   size: number;
+  asset?: ReleaseAssetReference;
 }
 
 export interface RemoteSnapshot {
@@ -122,8 +133,14 @@ export interface SyncSummary {
 }
 
 export type RemoteMutation =
-  | { path: string; kind: "put"; bytes: Uint8Array }
-  | { path: string; kind: "reuse"; sha: string }
+  | { path: string; kind: "put"; bytes: Uint8Array; sha?: string }
+  | {
+      path: string;
+      kind: "reuse";
+      sha: string;
+      size?: number;
+      asset?: ReleaseAssetReference;
+    }
   | { path: string; kind: "delete" };
 
 export interface CommitResult {
@@ -134,7 +151,7 @@ export interface CommitResult {
 export interface RemoteRepository {
   testConnection(): Promise<void>;
   getSnapshot(knownState?: SyncState): Promise<RemoteSnapshot>;
-  readBlob(sha: string): Promise<Uint8Array>;
+  readBlob(file: RemoteFileSnapshot): Promise<Uint8Array>;
   commit(
     expectedHead: string | null,
     mutations: RemoteMutation[],

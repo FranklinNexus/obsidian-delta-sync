@@ -8,6 +8,7 @@ import {
   type RequestTransport,
   type TransportResponse,
 } from "../src/github-client";
+import { gitBlobSha } from "../src/utils";
 
 class RecordingTransport implements RequestTransport {
   readonly requests: {
@@ -143,6 +144,11 @@ describe("GitHubClient", () => {
       }),
       ok({ object: { sha: "head-initial" } }),
       ok({ sha: "head-initial", tree: { sha: "tree-initial" } }),
+      ok({
+        sha: "tree-initial",
+        truncated: false,
+        tree: [{ path: "note.md", mode: "100644", type: "blob", sha: "blob-initial", size: 5 }],
+      }),
       created({ sha: "tree-final" }),
       created({ sha: "head-final" }),
       ok({ object: { sha: "head-initial" } }),
@@ -209,14 +215,147 @@ describe("GitHubClient", () => {
       transport,
     });
 
-    expect(await client.readBlob("blob-1")).toEqual(new Uint8Array([0, 128, 255]));
+    expect(await client.readBlob({ path: "media.bin", sha: "blob-1", size: 3 })).toEqual(
+      new Uint8Array([0, 128, 255]),
+    );
     expect(transport.requests[0]?.headers.Accept).toBe("application/vnd.github.raw+json");
+  });
+
+  it("merges hidden Release Asset entries into a remote snapshot and downloads their bytes", async () => {
+    const manifest = new TextEncoder().encode(
+      JSON.stringify({
+        version: 1,
+        files: {
+          "images/photo.png": {
+            sha: "content-sha",
+            size: 3,
+            asset: { releaseId: 10, assetId: 20, name: "asset-photo" },
+          },
+        },
+      }),
+    );
+    const transport = new RecordingTransport([
+      ok({ object: { sha: "head-1" } }),
+      ok({ sha: "head-1", tree: { sha: "tree-1" } }),
+      ok({
+        sha: "tree-1",
+        truncated: false,
+        tree: [
+          { path: "note.md", mode: "100644", type: "blob", sha: "note-sha", size: 4 },
+          {
+            path: ".delta-sync-assets.json",
+            mode: "100644",
+            type: "blob",
+            sha: "manifest-sha",
+            size: manifest.byteLength,
+          },
+        ],
+      }),
+      raw(manifest),
+      raw(new Uint8Array([0, 128, 255])),
+    ]);
+    const client = new GitHubClient({
+      owner: "owner",
+      repository: "repo",
+      branch: "main",
+      token: "secret",
+      transport,
+    });
+
+    const snapshot = await client.getSnapshot();
+    const photo = snapshot.files.get("images/photo.png");
+    expect(snapshot.files.has(".delta-sync-assets.json")).toBe(false);
+    expect(photo).toMatchObject({ sha: "content-sha", size: 3, asset: { assetId: 20 } });
+    expect(await client.readBlob(photo ?? { path: "missing", sha: "missing", size: 0 })).toEqual(
+      new Uint8Array([0, 128, 255]),
+    );
+    expect(transport.requests[4]?.url).toContain("/releases/assets/20");
+    expect(transport.requests[4]?.headers.Accept).toBe("application/octet-stream");
+  });
+
+  it("uploads an attachment before atomically publishing its hidden manifest", async () => {
+    const media = new Uint8Array([0, 128, 255]);
+    const mediaSha = await gitBlobSha(media);
+    const manifest = new TextEncoder().encode(
+      JSON.stringify({
+        version: 1,
+        files: {
+          "images/photo.png": {
+            sha: mediaSha,
+            size: 3,
+            asset: { releaseId: 11, assetId: 22, name: "asset-photo" },
+          },
+        },
+      }),
+    );
+    const transport = new RecordingTransport([
+      ok({ object: { sha: "head-1" } }),
+      ok({ sha: "head-1", tree: { sha: "tree-1" } }),
+      ok({
+        sha: "tree-1",
+        truncated: false,
+        tree: [{ path: "images/photo.png", mode: "100644", type: "blob", sha: mediaSha, size: 3 }],
+      }),
+      failed(404, "Not Found"),
+      created({ id: 11, tag_name: "delta-sync-assets-v1", assets: [] }),
+      created({ id: 22, name: "asset-photo", size: 3 }),
+      created({ sha: "tree-2" }),
+      created({ sha: "head-2" }),
+      ok({ object: { sha: "head-1" } }),
+      ok({}),
+      ok({ sha: "head-2", tree: { sha: "tree-2" } }),
+      ok({
+        sha: "tree-2",
+        truncated: false,
+        tree: [
+          {
+            path: ".delta-sync-assets.json",
+            mode: "100644",
+            type: "blob",
+            sha: "manifest-sha",
+            size: manifest.byteLength,
+          },
+        ],
+      }),
+      raw(manifest),
+    ]);
+    const client = new GitHubClient({
+      owner: "owner",
+      repository: "repo",
+      branch: "main",
+      token: "secret",
+      transport,
+    });
+
+    const result = await client.commit(
+      "head-1",
+      [{ path: "images/photo.png", kind: "put", bytes: media, sha: mediaSha }],
+      "Sync",
+    );
+
+    expect(result.snapshot.files.get("images/photo.png")).toMatchObject({
+      sha: mediaSha,
+      asset: { releaseId: 11, assetId: 22 },
+    });
+    const uploadIndex = transport.requests.findIndex((request) =>
+      request.url.includes("uploads.github.com"),
+    );
+    const branchUpdateIndex = transport.requests.findIndex((request) => request.method === "PATCH");
+    expect(uploadIndex).toBeGreaterThan(-1);
+    expect(branchUpdateIndex).toBeGreaterThan(uploadIndex);
+    const tree = transport.requests.find(
+      (request) => request.url.endsWith("/git/trees") && request.method === "POST",
+    );
+    expect(JSON.parse(tree?.body ?? "{}")).toMatchObject({
+      tree: [{ path: "images/photo.png", sha: null }, { path: ".delta-sync-assets.json" }],
+    });
   });
 
   it("updates the branch without force after creating an inline tree", async () => {
     const transport = new RecordingTransport([
       ok({ object: { sha: "head-1" } }),
       ok({ sha: "head-1", tree: { sha: "tree-1" } }),
+      ok({ sha: "tree-1", truncated: false, tree: [] }),
       created({ sha: "tree-new" }),
       created({ sha: "head-2" }),
       ok({ object: { sha: "head-1" } }),
@@ -252,7 +391,7 @@ describe("GitHubClient", () => {
     );
   });
 
-  it("retries a transient blob upload failure with backoff", async () => {
+  it("retries a transient Release Asset upload before advancing the branch", async () => {
     vi.stubGlobal("setTimeout", (callback: () => void) => {
       callback();
       return 0;
@@ -260,8 +399,11 @@ describe("GitHubClient", () => {
     const transport = new RecordingTransport([
       ok({ object: { sha: "head-1" } }),
       ok({ sha: "head-1", tree: { sha: "tree-1" } }),
+      ok({ sha: "tree-1", truncated: false, tree: [] }),
+      failed(404, "Not Found"),
+      created({ id: 11, tag_name: "delta-sync-assets-v1", assets: [] }),
       failed(500, "We couldn't respond to your request in time."),
-      created({ sha: "blob-new" }),
+      created({ id: 22, name: "asset-uploaded", size: 3 }),
       created({ sha: "tree-new" }),
       created({ sha: "head-2" }),
       ok({ object: { sha: "head-1" } }),
@@ -284,9 +426,11 @@ describe("GitHubClient", () => {
         "Sync",
       ),
     ).resolves.toMatchObject({ commitSha: "head-2" });
-    expect(transport.requests.filter((request) => request.url.endsWith("/git/blobs"))).toHaveLength(
-      2,
+    const uploads = transport.requests.filter((request) =>
+      request.url.includes("uploads.github.com"),
     );
+    expect(uploads).toHaveLength(2);
+    expect(uploads[0]?.body).toBeInstanceOf(ArrayBuffer);
     vi.unstubAllGlobals();
   });
 
@@ -294,6 +438,7 @@ describe("GitHubClient", () => {
     const transport = new RecordingTransport([
       ok({ object: { sha: "head-1" } }),
       ok({ sha: "head-1", tree: { sha: "tree-1" } }),
+      ok({ sha: "tree-1", truncated: false, tree: [] }),
       created({ sha: "tree-2" }),
       created({ sha: "head-2" }),
       created({ sha: "tree-3" }),

@@ -6,6 +6,7 @@ import type {
   LocalVault,
   RemoteMutation,
   RemoteRepository,
+  RemoteFileSnapshot,
   RemoteSnapshot,
   SyncState,
 } from "../src/types";
@@ -148,7 +149,12 @@ export class MemoryRemote implements RemoteRepository {
         files: new Map(
           Object.entries(knownState.entries).map(([path, entry]) => [
             path,
-            { path, sha: entry.blobSha, size: entry.size },
+            {
+              path,
+              sha: entry.blobSha,
+              size: entry.size,
+              ...(entry.asset ? { asset: entry.asset } : {}),
+            },
           ]),
         ),
       };
@@ -166,9 +172,9 @@ export class MemoryRemote implements RemoteRepository {
     };
   }
 
-  async readBlob(sha: string): Promise<Uint8Array> {
-    const bytes = this.blobs.get(sha);
-    if (!bytes) throw new Error(`Unknown blob ${sha}`);
+  async readBlob(file: RemoteFileSnapshot): Promise<Uint8Array> {
+    const bytes = this.blobs.get(file.sha);
+    if (!bytes) throw new Error(`Unknown blob ${file.sha}`);
     return new Uint8Array(bytes);
   }
 
