@@ -225,6 +225,10 @@ export class GitHubClient implements RemoteRepository {
     return this.options.branch.split("/").map(encodeURIComponent).join("/");
   }
 
+  private contentsPath(path: string): string {
+    return path.split("/").map(encodeURIComponent).join("/");
+  }
+
   async testConnection(): Promise<void> {
     await this.request("");
     try {
@@ -316,16 +320,45 @@ export class GitHubClient implements RemoteRepository {
     mutations: RemoteMutation[],
     message: string,
   ): Promise<CommitResult> {
+    if (expectedHead === null) {
+      if ((await this.getHead()) !== null) {
+        throw new GitHubApiError("Remote branch changed during sync; retry required", 409);
+      }
+      const bootstrap = mutations.find(
+        (mutation): mutation is Extract<RemoteMutation, { kind: "put" }> => mutation.kind === "put",
+      );
+      if (!bootstrap) {
+        throw new Error("Cannot initialize an empty repository without a local file to upload");
+      }
+
+      // GitHub cannot create refs through the Git Data API for an empty repository.
+      // Seed the branch with a real vault file, then use the normal atomic commit path.
+      await this.request(`/contents/${this.contentsPath(bootstrap.path)}`, "PUT", {
+        message,
+        content: bytesToBase64(bootstrap.bytes),
+        branch: this.options.branch,
+      });
+      const initialized = await this.getSnapshot();
+      if (initialized.commitSha === null) {
+        throw new Error("GitHub did not create a branch while initializing the empty repository");
+      }
+
+      const remaining = mutations.filter((mutation) => mutation !== bootstrap);
+      if (remaining.length === 0) {
+        return { commitSha: initialized.commitSha, snapshot: initialized };
+      }
+      return this.commit(initialized.commitSha, remaining, message);
+    }
+
     const currentHead = await this.getHead();
     if (currentHead !== expectedHead) {
       throw new GitHubApiError("Remote branch changed during sync; retry required", 409);
     }
 
-    let baseTree: string | null = null;
-    if (expectedHead !== null) {
-      const commitResponse = await this.request(`/git/commits/${encodeURIComponent(expectedHead)}`);
-      baseTree = parseCommit(commitResponse.json).tree.sha;
-    }
+    const baseCommitResponse = await this.request(
+      `/git/commits/${encodeURIComponent(expectedHead)}`,
+    );
+    const baseTree = parseCommit(baseCommitResponse.json).tree.sha;
 
     const entries = await mapWithConcurrency(
       mutations,
@@ -343,12 +376,13 @@ export class GitHubClient implements RemoteRepository {
     );
 
     if (entries.length === 0) {
-      return { commitSha: expectedHead ?? "", snapshot: await this.getSnapshot() };
+      return { commitSha: expectedHead, snapshot: await this.getSnapshot() };
     }
 
-    const treeBody: Record<string, unknown> = { tree: entries };
-    if (baseTree !== null) treeBody.base_tree = baseTree;
-    const treeResponse = await this.request("/git/trees", "POST", treeBody);
+    const treeResponse = await this.request("/git/trees", "POST", {
+      tree: entries,
+      base_tree: baseTree,
+    });
     const treeSha = stringValue(
       objectValue(treeResponse.json, "created tree").sha,
       "created tree sha",
@@ -357,7 +391,7 @@ export class GitHubClient implements RemoteRepository {
     const commitBody: Record<string, unknown> = {
       message,
       tree: treeSha,
-      parents: expectedHead === null ? [] : [expectedHead],
+      parents: [expectedHead],
     };
     const commitResponse = await this.request("/git/commits", "POST", commitBody);
     const commitSha = stringValue(
@@ -365,17 +399,10 @@ export class GitHubClient implements RemoteRepository {
       "created commit sha",
     );
 
-    if (expectedHead === null) {
-      await this.request("/git/refs", "POST", {
-        ref: `refs/heads/${this.options.branch}`,
-        sha: commitSha,
-      });
-    } else {
-      await this.request(`/git/refs/heads/${this.branchPath()}`, "PATCH", {
-        sha: commitSha,
-        force: false,
-      });
-    }
+    await this.request(`/git/refs/heads/${this.branchPath()}`, "PATCH", {
+      sha: commitSha,
+      force: false,
+    });
 
     return { commitSha, snapshot: await this.getSnapshotAt(commitSha) };
   }

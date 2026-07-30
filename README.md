@@ -53,6 +53,9 @@ The read-only token also enforces the role on GitHub.
 6. Preview and explicitly confirm the first sync.
 7. Enable automatic sync to run on startup, app foreground, and the configured interval.
 
+The dedicated repository may start empty. Delta Sync initializes it with one real vault file, then
+commits the remaining first-sync changes without adding marker or control files to the vault.
+
 Do not run another tool that writes the same vault files. `.obsidian`, `.trash`, `.git`, oversized
 files, and custom glob patterns are excluded. Remote deletions use the Obsidian trash.
 

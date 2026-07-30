@@ -127,6 +127,67 @@ describe("GitHubClient", () => {
     await expect(client.testConnection()).resolves.toBeUndefined();
   });
 
+  it("initializes an empty repository with a real vault file before committing the remainder", async () => {
+    const transport = new RecordingTransport([
+      failed(409, "Git Repository is empty."),
+      created({ content: {}, commit: { sha: "head-initial" } }),
+      ok({ object: { sha: "head-initial" } }),
+      ok({ sha: "head-initial", tree: { sha: "tree-initial" } }),
+      ok({
+        sha: "tree-initial",
+        truncated: false,
+        tree: [{ path: "note.md", mode: "100644", type: "blob", sha: "blob-initial", size: 5 }],
+      }),
+      ok({ object: { sha: "head-initial" } }),
+      ok({ sha: "head-initial", tree: { sha: "tree-initial" } }),
+      created({ sha: "blob-second" }),
+      created({ sha: "tree-final" }),
+      created({ sha: "head-final" }),
+      ok({}),
+      ok({ sha: "head-final", tree: { sha: "tree-final" } }),
+      ok({
+        sha: "tree-final",
+        truncated: false,
+        tree: [
+          { path: "note.md", mode: "100644", type: "blob", sha: "blob-initial", size: 5 },
+          { path: "second.md", mode: "100644", type: "blob", sha: "blob-second", size: 6 },
+        ],
+      }),
+    ]);
+    const client = new GitHubClient({
+      owner: "owner",
+      repository: "repo",
+      branch: "main",
+      token: "secret",
+      transport,
+    });
+
+    const result = await client.commit(
+      null,
+      [
+        { path: "note.md", kind: "put", bytes: new TextEncoder().encode("first") },
+        { path: "second.md", kind: "put", bytes: new TextEncoder().encode("second") },
+      ],
+      "Sync",
+    );
+
+    expect(result.commitSha).toBe("head-final");
+    expect(result.snapshot.files).toHaveLength(2);
+    const bootstrap = transport.requests.find((request) =>
+      request.url.endsWith("/contents/note.md"),
+    );
+    expect(bootstrap?.method).toBe("PUT");
+    expect(JSON.parse(bootstrap?.body ?? "{}")).toMatchObject({
+      message: "Sync",
+      content: "Zmlyc3Q=",
+      branch: "main",
+    });
+    const secondBlob = transport.requests.find(
+      (request) => request.url.endsWith("/git/blobs") && request.method === "POST",
+    );
+    expect(JSON.parse(secondBlob?.body ?? "{}")).toMatchObject({ content: "c2Vjb25k" });
+  });
+
   it("downloads blob bytes without base64 decoding when raw media is available", async () => {
     const transport = new RecordingTransport([raw(new Uint8Array([0, 128, 255]))]);
     const client = new GitHubClient({
