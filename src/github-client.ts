@@ -242,7 +242,13 @@ export class GitHubClient implements RemoteRepository {
       );
       return parseRef(response.json).object.sha;
     } catch (error) {
-      if (error instanceof GitHubApiError && error.status === 404) return null;
+      if (
+        error instanceof GitHubApiError &&
+        (error.status === 404 ||
+          (error.status === 409 && error.message === "Git Repository is empty."))
+      ) {
+        return null;
+      }
       throw error;
     }
   }

@@ -42,6 +42,10 @@ function created(json: unknown): TransportResponse {
   return { status: 201, json, text: JSON.stringify(json) };
 }
 
+function failed(status: number, message: string): TransportResponse {
+  return { status, json: { message }, text: message };
+}
+
 function raw(bytes: Uint8Array): TransportResponse {
   return {
     status: 200,
@@ -101,6 +105,26 @@ describe("GitHubClient", () => {
 
     expect(snapshot.files.get("note.md")?.sha).toBe("blob-1");
     expect(transport.requests).toHaveLength(1);
+  });
+
+  it("treats an empty GitHub repository as an empty remote snapshot", async () => {
+    const transport = new RecordingTransport([
+      failed(409, "Git Repository is empty."),
+      ok({}),
+      failed(409, "Git Repository is empty."),
+    ]);
+    const client = new GitHubClient({
+      owner: "owner",
+      repository: "repo",
+      branch: "main",
+      token: "secret",
+      transport,
+    });
+
+    const snapshot = await client.getSnapshot();
+    expect(snapshot).toMatchObject({ commitSha: null, treeSha: null });
+    expect(snapshot.files).toHaveLength(0);
+    await expect(client.testConnection()).resolves.toBeUndefined();
   });
 
   it("downloads blob bytes without base64 decoding when raw media is available", async () => {
