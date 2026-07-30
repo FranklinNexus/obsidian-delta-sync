@@ -143,7 +143,6 @@ describe("GitHubClient", () => {
       }),
       ok({ object: { sha: "head-initial" } }),
       ok({ sha: "head-initial", tree: { sha: "tree-initial" } }),
-      created({ sha: "blob-second" }),
       created({ sha: "tree-final" }),
       created({ sha: "head-final" }),
       ok({ object: { sha: "head-initial" } }),
@@ -192,10 +191,12 @@ describe("GitHubClient", () => {
       ref: "refs/heads/vault-sync",
       sha: "head-initial",
     });
-    const secondBlob = transport.requests.find(
-      (request) => request.url.endsWith("/git/blobs") && request.method === "POST",
+    const finalTree = transport.requests.find(
+      (request) => request.url.endsWith("/git/trees") && request.method === "POST",
     );
-    expect(JSON.parse(secondBlob?.body ?? "{}")).toMatchObject({ content: "c2Vjb25k" });
+    expect(JSON.parse(finalTree?.body ?? "{}")).toMatchObject({
+      tree: [{ path: "second.md", mode: "100644", type: "blob", content: "second" }],
+    });
   });
 
   it("downloads blob bytes without base64 decoding when raw media is available", async () => {
@@ -212,11 +213,10 @@ describe("GitHubClient", () => {
     expect(transport.requests[0]?.headers.Accept).toBe("application/vnd.github.raw+json");
   });
 
-  it("updates the branch without force after creating a commit", async () => {
+  it("updates the branch without force after creating an inline tree", async () => {
     const transport = new RecordingTransport([
       ok({ object: { sha: "head-1" } }),
       ok({ sha: "head-1", tree: { sha: "tree-1" } }),
-      created({ sha: "blob-new" }),
       created({ sha: "tree-new" }),
       created({ sha: "head-2" }),
       ok({ object: { sha: "head-1" } }),
@@ -247,6 +247,9 @@ describe("GitHubClient", () => {
     expect(
       transport.requests.filter((request) => request.url.endsWith("/git/commits")),
     ).toHaveLength(1);
+    expect(transport.requests.filter((request) => request.url.endsWith("/git/blobs"))).toHaveLength(
+      0,
+    );
   });
 
   it("retries a transient blob upload failure with backoff", async () => {
@@ -277,7 +280,7 @@ describe("GitHubClient", () => {
     await expect(
       client.commit(
         "head-1",
-        [{ path: "note.md", kind: "put", bytes: new TextEncoder().encode("hello") }],
+        [{ path: "attachment.bin", kind: "put", bytes: new Uint8Array([0, 128, 255]) }],
         "Sync",
       ),
     ).resolves.toMatchObject({ commitSha: "head-2" });

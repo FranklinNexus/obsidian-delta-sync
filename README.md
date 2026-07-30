@@ -26,9 +26,10 @@ copyright notice are retained.
 
 A writer uploads local changes, pulls remote changes, and advances the sync branch atomically.
 Large first syncs construct a short private commit chain in batches before the branch moves, so
-other devices never observe a partial tree. The branch head is checked before the update and
-force pushes are never used. Blob uploads are paced and transient GitHub errors retry with
-backoff.
+other devices never observe a partial tree. Small UTF-8 notes are created inline in those Tree
+requests, reducing first-sync API calls dramatically; binary and large files keep paced blob
+uploads with transient-error backoff. The branch head is checked before the update and force
+pushes are never used.
 
 Use a fine-grained GitHub token restricted to the selected repository with:
 

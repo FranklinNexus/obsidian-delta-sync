@@ -107,9 +107,51 @@ const SECONDARY_RATE_LIMIT_COOLDOWN_MS = 60_000;
 const TRANSIENT_ERROR_INITIAL_COOLDOWN_MS = 15_000;
 const TRANSIENT_ERROR_MAX_COOLDOWN_MS = 120_000;
 const MAX_MUTATIONS_PER_TRANSACTION_COMMIT = 100;
+const MAX_INLINE_TREE_CONTENT_BYTES = 256 * 1024;
+const MAX_INLINE_TREE_BODY_BYTES = 512 * 1024;
 
 function pause(milliseconds: number): Promise<void> {
   return new Promise((resolve) => globalThis.setTimeout(resolve, milliseconds));
+}
+
+function inlineTreeContent(bytes: Uint8Array): string | null {
+  if (bytes.byteLength > MAX_INLINE_TREE_CONTENT_BYTES || bytes.includes(0)) return null;
+  try {
+    const content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+    const encoded = new TextEncoder().encode(content);
+    if (encoded.byteLength !== bytes.byteLength) return null;
+    for (let index = 0; index < bytes.byteLength; index += 1) {
+      if (encoded[index] !== bytes[index]) return null;
+    }
+    return content;
+  } catch {
+    return null;
+  }
+}
+
+function transactionBatches(mutations: RemoteMutation[]): RemoteMutation[][] {
+  const batches: RemoteMutation[][] = [];
+  let batch: RemoteMutation[] = [];
+  let inlineBytes = 0;
+
+  for (const mutation of mutations) {
+    const nextInlineBytes =
+      mutation.kind === "put" && inlineTreeContent(mutation.bytes) !== null
+        ? mutation.bytes.byteLength
+        : 0;
+    const exceedsEntryLimit = batch.length >= MAX_MUTATIONS_PER_TRANSACTION_COMMIT;
+    const exceedsBodyLimit =
+      batch.length > 0 && inlineBytes + nextInlineBytes > MAX_INLINE_TREE_BODY_BYTES;
+    if (exceedsEntryLimit || exceedsBodyLimit) {
+      batches.push(batch);
+      batch = [];
+      inlineBytes = 0;
+    }
+    batch.push(mutation);
+    inlineBytes += nextInlineBytes;
+  }
+  if (batch.length > 0) batches.push(batch);
+  return batches;
 }
 
 async function mapWithConcurrency<T, R>(
@@ -404,6 +446,10 @@ export class GitHubClient implements RemoteRepository {
         if (mutation.kind === "reuse") {
           return { path: mutation.path, mode: "100644", type: "blob", sha: mutation.sha };
         }
+        const content = inlineTreeContent(mutation.bytes);
+        if (content !== null) {
+          return { path: mutation.path, mode: "100644", type: "blob", content };
+        }
         const sha = await this.createBlob(mutation.bytes);
         return { path: mutation.path, mode: "100644", type: "blob", sha };
       },
@@ -491,13 +537,8 @@ export class GitHubClient implements RemoteRepository {
     );
     let parentCommit = expectedHead;
     let baseTree = parseCommit(baseCommitResponse.json).tree.sha;
-    for (let index = 0; index < mutations.length; index += MAX_MUTATIONS_PER_TRANSACTION_COMMIT) {
-      const created = await this.createCommitObject(
-        parentCommit,
-        baseTree,
-        mutations.slice(index, index + MAX_MUTATIONS_PER_TRANSACTION_COMMIT),
-        message,
-      );
+    for (const batch of transactionBatches(mutations)) {
+      const created = await this.createCommitObject(parentCommit, baseTree, batch, message);
       parentCommit = created.commitSha;
       baseTree = created.treeSha;
     }
