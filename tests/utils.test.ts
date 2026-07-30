@@ -4,6 +4,7 @@ import {
   bytesToBase64,
   conflictPath,
   gitBlobSha,
+  mayNeedReleaseAsset,
   shouldExclude,
 } from "../src/utils";
 
@@ -17,6 +18,12 @@ describe("utilities", () => {
   it("round trips binary base64", () => {
     const input = new Uint8Array([0, 1, 127, 128, 255]);
     expect(base64ToBytes(bytesToBase64(input))).toEqual(input);
+  });
+
+  it("marks small binary extensions for one-time Release Asset migration", () => {
+    expect(mayNeedReleaseAsset("samples/sensor.bin", 176)).toBe(true);
+    expect(mayNeedReleaseAsset("samples/mydata.mat", 2037)).toBe(true);
+    expect(mayNeedReleaseAsset("notes/short.md", 176)).toBe(false);
   });
 
   it("always excludes Obsidian state and supports user globs", () => {

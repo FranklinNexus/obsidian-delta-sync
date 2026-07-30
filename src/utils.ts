@@ -24,6 +24,7 @@ export function needsReleaseAsset(bytes: Uint8Array): boolean {
 const RELEASE_ASSET_EXTENSIONS = new Set([
   "7z",
   "avi",
+  "bin",
   "bmp",
   "doc",
   "docx",
@@ -35,6 +36,7 @@ const RELEASE_ASSET_EXTENSIONS = new Set([
   "jpeg",
   "jpg",
   "m4a",
+  "mat",
   "mkv",
   "mov",
   "mp3",
