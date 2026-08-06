@@ -52,6 +52,7 @@ export interface SyncLogEntry {
 }
 
 export interface PluginData {
+  dataVersion: number;
   settings: SyncSettings;
   syncState: SyncState;
   localIndex: LocalIndex;

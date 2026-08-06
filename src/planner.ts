@@ -39,10 +39,12 @@ export function buildSyncPlan(
     const localSha = localFile?.gitSha;
     const remoteSha = remoteFile?.sha;
 
-    if (localSha === remoteSha) {
+    if (localFile && remoteFile && localSha === remoteSha) {
       decisions.push({ path, kind: "noop" });
       continue;
     }
+
+    if (!localFile && !remoteFile) continue;
 
     const localChanged = localSha !== baseSha;
     const remoteChanged = remoteSha !== baseSha;

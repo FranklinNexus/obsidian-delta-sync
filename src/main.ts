@@ -15,6 +15,7 @@ import { errorMessage } from "./utils";
 const MAX_LOGS = 50;
 const LOCAL_CHANGE_SYNC_DEBOUNCE_MS = 10_000;
 const ANDROID_NOMEDIA_MARKER = ".nomedia";
+const PLUGIN_DATA_VERSION = 1;
 
 function getOSName(): string {
   if (Platform.isMacOS) return "macos";
@@ -102,6 +103,7 @@ export default class DeltaSyncPlugin extends Plugin {
         .toLowerCase()
         .replace(/[^a-z0-9-]/g, "");
     this.data = {
+      dataVersion: PLUGIN_DATA_VERSION,
       settings: {
         ...DEFAULT_SETTINGS,
         ...storedSettings,
@@ -111,7 +113,10 @@ export default class DeltaSyncPlugin extends Plugin {
       },
       syncState: stored?.syncState ?? { ...EMPTY_SYNC_STATE, entries: {} },
       localIndex: stored?.localIndex ?? {},
-      logs: stored?.logs ?? [],
+      logs:
+        (stored?.dataVersion ?? 0) < PLUGIN_DATA_VERSION
+          ? (stored?.logs ?? []).filter((entry) => entry.status !== "failed")
+          : (stored?.logs ?? []),
     };
     await this.persistData();
   }
@@ -211,7 +216,7 @@ export default class DeltaSyncPlugin extends Plugin {
       new SyncSummaryModal(this.app, "Delta Sync preview", summary).open();
       this.setStatus(summary.conflicts > 0 ? "conflict" : "idle", "Delta Sync: preview ready");
     } catch (error) {
-      await this.handleFailure(error);
+      await this.handleFailure(error, true);
     }
   }
 
@@ -260,7 +265,7 @@ export default class DeltaSyncPlugin extends Plugin {
               );
               await this.executeSync(confirmedEngine, confirmedPreview);
             } catch (error) {
-              await this.handleFailure(error);
+              await this.handleFailure(error, true);
             }
           },
         ).open();
@@ -269,7 +274,7 @@ export default class DeltaSyncPlugin extends Plugin {
       }
       await this.executeSync(engine, preview);
     } catch (error) {
-      await this.handleFailure(error);
+      await this.handleFailure(error, interactive);
     }
   }
 
@@ -287,7 +292,7 @@ export default class DeltaSyncPlugin extends Plugin {
         await this.handleSuccess(result);
         return;
       } catch (error) {
-        if (attempt >= 2 || !this.isRetryableConflict(error)) throw error;
+        if (attempt >= 2 || !this.isRetryableRemoteChange(error)) throw error;
         this.setStatus("scanning", `Delta Sync: remote changed, retrying ${attempt + 1}/2...`);
         await new Promise((resolve) => window.setTimeout(resolve, 1000 * 2 ** attempt));
         activeEngine = this.engine();
@@ -296,10 +301,17 @@ export default class DeltaSyncPlugin extends Plugin {
     }
   }
 
-  private isRetryableConflict(error: unknown): boolean {
-    if (!(error instanceof GitHubApiError)) return false;
-    if (error.status === 409) return true;
-    return error.status === 422 && /fast forward|reference update failed/i.test(error.message);
+  private isRetryableRemoteChange(error: unknown): boolean {
+    if (error instanceof GitHubApiError) {
+      if (error.status === 404 || error.status === 409) return true;
+      return error.status === 422 && /fast forward|reference update failed/i.test(error.message);
+    }
+    return (
+      error instanceof Error &&
+      /remote file disappeared during sync|remote branch changed|expected head mismatch/i.test(
+        error.message,
+      )
+    );
   }
 
   private async handleSuccess(result: SyncRunResult): Promise<void> {
@@ -321,8 +333,12 @@ export default class DeltaSyncPlugin extends Plugin {
     );
   }
 
-  private async handleFailure(error: unknown): Promise<void> {
+  private async handleFailure(error: unknown, interactive: boolean): Promise<void> {
     const message = errorMessage(error);
+    if (!interactive) {
+      this.setStatus("idle", "Delta Sync: waiting to retry");
+      return;
+    }
     this.appendLog({
       timestamp: new Date().toISOString(),
       status: "failed",

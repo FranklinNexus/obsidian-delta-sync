@@ -64,6 +64,12 @@ describe("buildSyncPlan", () => {
     });
   });
 
+  it("drops a stale base entry when the file is absent locally and remotely", () => {
+    const plan = buildSyncPlan(base("deleted.pdf", "old"), new Map(), "remote-head", new Map());
+
+    expect(plan.decisions).toEqual([]);
+  });
+
   it.each([
     ["local edit", "b", "l", "b", "follower-replace-remote"],
     ["local delete", "b", undefined, "b", "download-remote"],

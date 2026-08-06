@@ -151,9 +151,10 @@ export class SyncEngine {
         case "noop": {
           // Existing Git blob-backed binary files are migrated on the first run after upgrade.
           // The branch is not advanced until their Release Assets and manifest are all ready.
-          const remoteFile = this.remoteFile(remote, decision.path);
+          if (this.settings.deviceMode !== "writer") break;
+          const remoteFile = remote.files.get(decision.path);
           if (
-            this.settings.deviceMode === "writer" &&
+            remoteFile &&
             !remoteFile.asset &&
             mayNeedReleaseAsset(decision.path, remoteFile.size)
           ) {

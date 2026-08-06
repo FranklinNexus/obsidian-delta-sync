@@ -127,6 +127,25 @@ describe("SyncEngine", () => {
     expect(vault.trashed).toContain("delete.md");
   });
 
+  it("forgets a stale base entry when the file is already absent on both sides", async () => {
+    const remote = new MemoryRemote();
+    const vault = new MemoryVault();
+    const result = await new SyncEngine(vault, remote, settings("device")).run({
+      baseCommitSha: "old-head",
+      entries: {
+        "deleted.pdf": {
+          blobSha: "old-blob",
+          sha256: "old-sha256",
+          size: 123,
+        },
+      },
+    });
+
+    expect(result.plan.decisions).toEqual([]);
+    expect(result.nextState.entries).toEqual({});
+    expect(result.summary.conflicts).toBe(0);
+  });
+
   it("does not advance state when the remote changes during commit", async () => {
     const remote = new MemoryRemote();
     const vault = new MemoryVault({ "note.md": "content" });
