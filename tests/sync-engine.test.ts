@@ -7,6 +7,7 @@ import {
   type SyncSettings,
 } from "../src/types";
 import type { RemoteFileSnapshot } from "../src/types";
+import { withVaultConfigExclusion } from "../src/utils";
 import { MemoryRemote, MemoryVault } from "./helpers";
 
 function settings(deviceName: string, deviceMode: DeviceMode = "writer"): SyncSettings {
@@ -168,7 +169,7 @@ describe("SyncEngine", () => {
     const custom = {
       ...settings("device"),
       maxFileSizeMb: 0.000005,
-      excludePatterns: ["Private/**"],
+      excludePatterns: withVaultConfigExclusion(["Private/**"], ".obsidian"),
     };
     const result = await new SyncEngine(vault, remote, custom).run({
       ...EMPTY_SYNC_STATE,

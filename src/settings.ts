@@ -38,10 +38,10 @@ export class SyncSummaryModal extends Modal {
         button
           .setCta()
           .setButtonText(this.confirmLabel ?? "Confirm")
-          .onClick(async () => {
+          .onClick(() => {
             button.setDisabled(true);
             this.close();
-            await this.onConfirm?.();
+            void this.onConfirm?.();
           }),
       );
     }
@@ -97,6 +97,10 @@ export class DeltaSyncSettingTab extends PluginSettingTab {
 
   // Compatibility fallback for Obsidian versions earlier than 1.13.
   display(): void {
+    this.renderLegacySettings();
+  }
+
+  private renderLegacySettings(): void {
     this.containerEl.empty();
     for (const spec of this.settingSpecs()) {
       const setting = new Setting(this.containerEl).setName(spec.name).setDesc(spec.desc);
@@ -107,7 +111,17 @@ export class DeltaSyncSettingTab extends PluginSettingTab {
   private rerender(): void {
     const update = (this as unknown as { update?: () => void }).update;
     if (typeof update === "function") update.call(this);
-    else this.display();
+    else this.renderLegacySettings();
+  }
+
+  private persistSettings(afterSave?: () => void): void {
+    void this.plugin
+      .persistData()
+      .then(() => afterSave?.())
+      .catch(
+        (error: unknown) =>
+          new Notice(`Could not save Delta Sync settings: ${String(error)}`, 8000),
+      );
   }
 
   private settingSpecs(): {
@@ -123,10 +137,10 @@ export class DeltaSyncSettingTab extends PluginSettingTab {
         desc: "GitHub account or organization that owns the private repository.",
         configure: (setting) =>
           setting.addText((text) =>
-            text.setValue(settings.owner).onChange(async (value) => {
+            text.setValue(settings.owner).onChange((value) => {
               settings.owner = value.trim();
               settings.firstSyncConfirmed = false;
-              await this.plugin.persistData();
+              this.persistSettings();
             }),
           ),
       },
@@ -135,10 +149,10 @@ export class DeltaSyncSettingTab extends PluginSettingTab {
         desc: "Dedicated private repository used for this vault.",
         configure: (setting) =>
           setting.addText((text) =>
-            text.setValue(settings.repository).onChange(async (value) => {
+            text.setValue(settings.repository).onChange((value) => {
               settings.repository = value.trim();
               settings.firstSyncConfirmed = false;
-              await this.plugin.persistData();
+              this.persistSettings();
             }),
           ),
       },
@@ -147,10 +161,10 @@ export class DeltaSyncSettingTab extends PluginSettingTab {
         desc: "The branch root maps directly to the vault root.",
         configure: (setting) =>
           setting.addText((text) =>
-            text.setValue(settings.branch).onChange(async (value) => {
+            text.setValue(settings.branch).onChange((value) => {
               settings.branch = value.trim() || "main";
               settings.firstSyncConfirmed = false;
-              await this.plugin.persistData();
+              this.persistSettings();
             }),
           ),
       },
@@ -192,9 +206,9 @@ export class DeltaSyncSettingTab extends PluginSettingTab {
         desc: "Used in commit messages and conflict filenames.",
         configure: (setting) =>
           setting.addText((text) =>
-            text.setValue(settings.deviceName).onChange(async (value) => {
+            text.setValue(settings.deviceName).onChange((value) => {
               settings.deviceName = value.trim();
-              await this.plugin.persistData();
+              this.persistSettings();
             }),
           ),
       },
@@ -207,11 +221,10 @@ export class DeltaSyncSettingTab extends PluginSettingTab {
               .addOption("writer", "Writer")
               .addOption("follower", "Pull-only follower")
               .setValue(settings.deviceMode)
-              .onChange(async (value) => {
+              .onChange((value) => {
                 settings.deviceMode = value === "follower" ? "follower" : "writer";
                 settings.firstSyncConfirmed = false;
-                await this.plugin.persistData();
-                this.rerender();
+                this.persistSettings(() => this.rerender());
               }),
           ),
       },
@@ -220,10 +233,10 @@ export class DeltaSyncSettingTab extends PluginSettingTab {
         desc: "Sync after startup, when returning to the app, and on the configured interval.",
         configure: (setting) =>
           setting.addToggle((toggle) =>
-            toggle.setValue(settings.autoSync).onChange(async (value) => {
+            toggle.setValue(settings.autoSync).onChange((value) => {
               settings.autoSync = value;
-              await this.plugin.persistData();
               this.plugin.configureAutoSync();
+              this.persistSettings();
             }),
           ),
       },
@@ -233,12 +246,12 @@ export class DeltaSyncSettingTab extends PluginSettingTab {
         configure: (setting) =>
           setting.addText((text) => {
             text.inputEl.type = "number";
-            text.setValue(String(settings.intervalMinutes)).onChange(async (value) => {
+            text.setValue(String(settings.intervalMinutes)).onChange((value) => {
               const parsed = Number(value);
               if (!Number.isFinite(parsed)) return;
               settings.intervalMinutes = Math.max(1, Math.round(parsed));
-              await this.plugin.persistData();
               this.plugin.configureAutoSync();
+              this.persistSettings();
             });
           }),
       },
@@ -248,11 +261,11 @@ export class DeltaSyncSettingTab extends PluginSettingTab {
         configure: (setting) =>
           setting.addText((text) => {
             text.inputEl.type = "number";
-            text.setValue(String(settings.maxFileSizeMb)).onChange(async (value) => {
+            text.setValue(String(settings.maxFileSizeMb)).onChange((value) => {
               const parsed = Number(value);
               if (!Number.isFinite(parsed)) return;
               settings.maxFileSizeMb = Math.min(100, Math.max(1, parsed));
-              await this.plugin.persistData();
+              this.persistSettings();
             });
           }),
       },
@@ -264,12 +277,12 @@ export class DeltaSyncSettingTab extends PluginSettingTab {
             area
               .setValue(settings.excludePatterns.join("\n"))
               .setPlaceholder("Private/**\n**/*.tmp")
-              .onChange(async (value) => {
+              .onChange((value) => {
                 settings.excludePatterns = value
                   .split("\n")
                   .map((line) => line.trim())
                   .filter(Boolean);
-                await this.plugin.persistData();
+                this.persistSettings();
               }),
           ),
       },
@@ -278,16 +291,13 @@ export class DeltaSyncSettingTab extends PluginSettingTab {
         desc: "Checks repository access without changing any files.",
         configure: (setting) =>
           setting.addButton((button) =>
-            button.setButtonText("Test").onClick(async () => {
+            button.setButtonText("Test").onClick(() => {
               button.setDisabled(true);
-              try {
-                await this.plugin.testConnection();
-                new Notice("GitHub connection succeeded.");
-              } catch (error) {
-                new Notice(`Connection failed: ${String(error)}`, 8000);
-              } finally {
-                button.setDisabled(false);
-              }
+              void this.plugin
+                .testConnection()
+                .then(() => new Notice("GitHub connection succeeded."))
+                .catch((error: unknown) => new Notice(`Connection failed: ${String(error)}`, 8000))
+                .finally(() => button.setDisabled(false));
             }),
           ),
       },
@@ -297,13 +307,17 @@ export class DeltaSyncSettingTab extends PluginSettingTab {
         configure: (setting) => {
           setting
             .addButton((button) =>
-              button.setButtonText("Preview").onClick(async () => this.plugin.previewSync()),
+              button.setButtonText("Preview").onClick(() => {
+                void this.plugin.previewSync();
+              }),
             )
             .addButton((button) =>
               button
                 .setCta()
                 .setButtonText("Sync now")
-                .onClick(async () => this.plugin.requestSync()),
+                .onClick(() => {
+                  void this.plugin.requestSync();
+                }),
             )
             .addButton((button) =>
               button
@@ -316,16 +330,18 @@ export class DeltaSyncSettingTab extends PluginSettingTab {
         name: "Disconnect",
         desc: "Clears the stored token and local sync baseline. Remote files are not changed.",
         configure: (setting) =>
-          setting.addButton((button) =>
-            button
-              .setDestructive()
-              .setButtonText("Disconnect")
-              .onClick(async () => {
-                await this.plugin.disconnect();
-                new Notice("Delta Sync disconnected.");
-                this.rerender();
-              }),
-          ),
+          setting.addButton((button) => {
+            button.buttonEl.addClass("mod-warning");
+            button.setButtonText("Disconnect").onClick(() => {
+              void this.plugin
+                .disconnect()
+                .then(() => {
+                  new Notice("Delta Sync disconnected.");
+                  this.rerender();
+                })
+                .catch((error: unknown) => new Notice(`Disconnect failed: ${String(error)}`, 8000));
+            });
+          }),
       },
     ];
   }

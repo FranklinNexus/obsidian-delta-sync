@@ -1,6 +1,6 @@
 {
   "name": "obsidian-delta-sync",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "description": "Incremental GitHub sync for writer and pull-only Obsidian devices.",
   "private": true,
   "type": "module",

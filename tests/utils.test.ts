@@ -28,7 +28,8 @@ describe("utilities", () => {
   });
 
   it("always excludes Obsidian state and supports user globs", () => {
-    expect(shouldExclude(".obsidian/workspace.json", [])).toBe(true);
+    const patterns = withVaultConfigExclusion([], ".obsidian");
+    expect(shouldExclude(".obsidian/workspace.json", patterns)).toBe(true);
     expect(shouldExclude(".nomedia", [])).toBe(true);
     expect(shouldExclude("Private/note.md", ["Private/**"])).toBe(true);
     expect(shouldExclude("Notes/note.md", ["Private/**"])).toBe(false);

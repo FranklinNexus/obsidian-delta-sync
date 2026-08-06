@@ -121,7 +121,6 @@ export function globMatches(path: string, glob: string): boolean {
 }
 
 const DEFAULT_EXCLUDES = [
-  ".obsidian/**",
   ".trash/**",
   ".git/**",
   ".nomedia",
