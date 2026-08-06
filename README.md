@@ -65,8 +65,9 @@ The dedicated repository may start empty. Delta Sync initializes it with one rea
 constructs the remaining first-sync changes before atomically advancing the configured sync branch.
 Its hidden Release Asset index is never created inside the Vault.
 
-Do not run another tool that writes the same vault files. `.obsidian`, `.trash`, `.git`, oversized
-files, and custom glob patterns are excluded. Remote deletions use the Obsidian trash.
+Do not run another tool that writes the same vault files. The active Obsidian configuration
+directory (including custom locations), `.trash`, `.git`, oversized files, and custom glob patterns
+are excluded. Remote deletions use the Obsidian trash.
 On Android, Delta Sync creates a local `.nomedia` marker so the system photo picker and apps like
 WeChat do not index every vault attachment as personal photos.
 

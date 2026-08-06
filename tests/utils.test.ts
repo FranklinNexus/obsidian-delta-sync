@@ -6,6 +6,7 @@ import {
   gitBlobSha,
   mayNeedReleaseAsset,
   shouldExclude,
+  withVaultConfigExclusion,
 } from "../src/utils";
 
 describe("utilities", () => {
@@ -31,6 +32,18 @@ describe("utilities", () => {
     expect(shouldExclude(".nomedia", [])).toBe(true);
     expect(shouldExclude("Private/note.md", ["Private/**"])).toBe(true);
     expect(shouldExclude("Notes/note.md", ["Private/**"])).toBe(false);
+  });
+
+  it("excludes the vault's configured Obsidian settings directory", () => {
+    const patterns = withVaultConfigExclusion(["Private/**"], ".custom-config");
+
+    expect(patterns).toEqual(["Private/**", ".custom-config/**"]);
+    expect(shouldExclude(".custom-config/plugins/delta-sync/data.json", patterns)).toBe(true);
+    expect(shouldExclude("notes/visible.md", patterns)).toBe(false);
+  });
+
+  it("does not duplicate an existing config directory exclusion", () => {
+    expect(withVaultConfigExclusion([".config/**"], ".config/")).toEqual([".config/**"]);
   });
 
   it("preserves an extension in conflict filenames", () => {

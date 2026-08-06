@@ -392,9 +392,11 @@ describe("GitHubClient", () => {
   });
 
   it("retries a transient Release Asset upload before advancing the branch", async () => {
-    vi.stubGlobal("setTimeout", (callback: () => void) => {
-      callback();
-      return 0;
+    vi.stubGlobal("window", {
+      setTimeout: (callback: () => void) => {
+        callback();
+        return 0;
+      },
     });
     const transport = new RecordingTransport([
       ok({ object: { sha: "head-1" } }),

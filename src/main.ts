@@ -10,7 +10,7 @@ import {
   type SyncPhase,
   type SyncRunResult,
 } from "./types";
-import { errorMessage } from "./utils";
+import { errorMessage, withVaultConfigExclusion } from "./utils";
 
 const MAX_LOGS = 50;
 const LOCAL_CHANGE_SYNC_DEBOUNCE_MS = 10_000;
@@ -158,7 +158,13 @@ export default class DeltaSyncPlugin extends Plugin {
   }
 
   private engine(): SyncEngine {
-    return new SyncEngine(this.localVault, this.client(), this.data.settings);
+    return new SyncEngine(this.localVault, this.client(), {
+      ...this.data.settings,
+      excludePatterns: withVaultConfigExclusion(
+        this.data.settings.excludePatterns,
+        this.app.vault.configDir,
+      ),
+    });
   }
 
   async testConnection(): Promise<void> {

@@ -135,6 +135,13 @@ export function shouldExclude(path: string, userPatterns: string[]): boolean {
   return [...DEFAULT_EXCLUDES, ...userPatterns].some((pattern) => globMatches(path, pattern));
 }
 
+export function withVaultConfigExclusion(patterns: string[], configDir: string): string[] {
+  const normalizedConfigDir = normalizeVaultPath(configDir).replace(/\/+$/u, "");
+  if (!normalizedConfigDir) return [...patterns];
+  const configPattern = `${normalizedConfigDir}/**`;
+  return patterns.includes(configPattern) ? [...patterns] : [...patterns, configPattern];
+}
+
 export function conflictPath(path: string, source: string, timestamp = new Date()): string {
   const safeSource = source.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-|-$/g, "") || "remote";
   const stamp = timestamp.toISOString().replace(/[:.]/g, "-");

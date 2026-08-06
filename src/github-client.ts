@@ -144,7 +144,7 @@ const ASSET_RELEASE_MAX_ASSETS = 900;
 const RELEASE_ASSET_UPLOAD_CONCURRENCY = 3;
 
 function pause(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => globalThis.setTimeout(resolve, milliseconds));
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
 
 function transactionBatches(mutations: RemoteMutation[]): RemoteMutation[][] {
