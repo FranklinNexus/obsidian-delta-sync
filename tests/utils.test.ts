@@ -6,6 +6,7 @@ import {
   gitBlobSha,
   mayNeedReleaseAsset,
   shouldExclude,
+  shouldPreserveFolder,
   withVaultConfigExclusion,
 } from "../src/utils";
 
@@ -45,6 +46,17 @@ describe("utilities", () => {
 
   it("does not duplicate an existing config directory exclusion", () => {
     expect(withVaultConfigExclusion([".config/**"], ".config/")).toEqual([".config/**"]);
+  });
+
+  it("preserves excluded folders and removes ordinary empty folders", () => {
+    const patterns = withVaultConfigExclusion(["Private/**", ".agents/**"], ".obsidian");
+
+    expect(shouldPreserveFolder("Private", patterns)).toBe(true);
+    expect(shouldPreserveFolder("Private/empty", patterns)).toBe(true);
+    expect(shouldPreserveFolder(".agents/cache", patterns)).toBe(true);
+    expect(shouldPreserveFolder(".obsidian", patterns)).toBe(true);
+    expect(shouldPreserveFolder(".trash", patterns)).toBe(true);
+    expect(shouldPreserveFolder("ordinary/empty", patterns)).toBe(false);
   });
 
   it("preserves an extension in conflict filenames", () => {

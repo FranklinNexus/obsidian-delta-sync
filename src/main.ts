@@ -269,7 +269,7 @@ export default class DeltaSyncPlugin extends Plugin {
                 this.data.syncState,
                 this.data.localIndex,
               );
-              await this.executeSync(confirmedEngine, confirmedPreview);
+              await this.executeSync(confirmedEngine, confirmedPreview, true);
             } catch (error) {
               await this.handleFailure(error, true);
             }
@@ -278,13 +278,17 @@ export default class DeltaSyncPlugin extends Plugin {
         this.setStatus("idle", "Delta Sync: awaiting confirmation");
         return;
       }
-      await this.executeSync(engine, preview);
+      await this.executeSync(engine, preview, interactive);
     } catch (error) {
       await this.handleFailure(error, interactive);
     }
   }
 
-  private async executeSync(engine: SyncEngine, preview: PreviewResult): Promise<void> {
+  private async executeSync(
+    engine: SyncEngine,
+    preview: PreviewResult,
+    interactive: boolean,
+  ): Promise<void> {
     let activeEngine = engine;
     let activePreview = preview;
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -295,7 +299,7 @@ export default class DeltaSyncPlugin extends Plugin {
           this.data.localIndex,
           activePreview,
         );
-        await this.handleSuccess(result);
+        await this.handleSuccess(result, interactive);
         return;
       } catch (error) {
         if (attempt >= 2 || !this.isRetryableRemoteChange(error)) throw error;
@@ -320,7 +324,7 @@ export default class DeltaSyncPlugin extends Plugin {
     );
   }
 
-  private async handleSuccess(result: SyncRunResult): Promise<void> {
+  private async handleSuccess(result: SyncRunResult, interactive: boolean): Promise<void> {
     this.data.syncState = result.nextState;
     this.data.localIndex = result.nextLocalIndex;
     this.appendLog({
@@ -333,10 +337,12 @@ export default class DeltaSyncPlugin extends Plugin {
     await this.persistData();
     const phase = result.summary.conflicts > 0 ? "conflict" : "idle";
     this.setStatus(phase, `Delta Sync: ${result.summary.conflicts} conflicts`);
-    new Notice(
-      `Delta Sync complete: ${result.summary.uploaded} uploaded, ${result.summary.downloaded} downloaded, ${result.summary.conflicts} conflicts.`,
-      6000,
-    );
+    if (interactive) {
+      new Notice(
+        `Delta Sync complete: ${result.summary.uploaded} uploaded, ${result.summary.downloaded} downloaded, ${result.summary.conflicts} conflicts.`,
+        6000,
+      );
+    }
   }
 
   private async handleFailure(error: unknown, interactive: boolean): Promise<void> {

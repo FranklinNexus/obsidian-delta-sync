@@ -52,6 +52,7 @@ function emptySummary(plan: SyncPlan): SyncSummary {
     uploaded: 0,
     downloaded: 0,
     deletedLocal: 0,
+    deletedLocalFolders: 0,
     deletedRemote: 0,
     conflicts: 0,
     skipped: plan.skipped.length,
@@ -298,6 +299,18 @@ export class SyncEngine {
         size: localFile.size,
         ...(remoteFile.asset ? { asset: remoteFile.asset } : {}),
       };
+    }
+    if (this.settings.deviceMode === "follower") {
+      for (const path of finalLocal.files.keys()) {
+        if (!finalRemote.files.has(path)) {
+          throw new Error(
+            `Post-sync verification found a local-only follower file at ${path}; sync state was not advanced`,
+          );
+        }
+      }
+      summary.deletedLocalFolders = await this.localVault.pruneEmptyFolders(
+        this.settings.excludePatterns,
+      );
     }
 
     return {

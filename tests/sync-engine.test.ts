@@ -36,6 +36,12 @@ class ConcurrentReadRemote extends MemoryRemote {
   }
 }
 
+class FailingFolderCleanupVault extends MemoryVault {
+  override async pruneEmptyFolders(_excludePatterns: string[]): Promise<number> {
+    throw new Error("Folder cleanup failed");
+  }
+}
+
 describe("SyncEngine", () => {
   it("reports a follower replacement as a download and local trash operation", () => {
     const summary = summarizePlan({
@@ -279,5 +285,77 @@ describe("SyncEngine", () => {
     expect(result.summary.conflicts).toBe(0);
     expect(follower.text("note.md")).toBeUndefined();
     expect(follower.trashed).toContain("note.md");
+  });
+
+  it("prunes stale nested empty folders after a follower deletion", async () => {
+    const remote = new MemoryRemote();
+    await remote.seed({ "学校/课程/旧笔记.md": "remove me" });
+    const follower = new MemoryVault({ "学校/课程/旧笔记.md": "remove me" });
+    const engine = new SyncEngine(follower, remote, settings("phone", "follower"));
+    const baseline = await engine.run({ ...EMPTY_SYNC_STATE, entries: {} });
+    await remote.remove("学校/课程/旧笔记.md");
+
+    const result = await engine.run(baseline.nextState, baseline.nextLocalIndex);
+
+    expect(result.summary.deletedLocal).toBe(1);
+    expect(result.summary.deletedLocalFolders).toBe(2);
+    expect(follower.folders.has("学校/课程")).toBe(false);
+    expect(follower.folders.has("学校")).toBe(false);
+  });
+
+  it("preserves non-empty and excluded follower folders while pruning other empty folders", async () => {
+    const remote = new MemoryRemote();
+    await remote.seed({ "notes/keep.md": "content" });
+    const follower = new MemoryVault(
+      {
+        "notes/keep.md": "content",
+        ".obsidian/workspace.json": "config",
+        ".trash/deleted.md": "trash",
+      },
+      ["empty/remove/me", "Private/empty", ".agents/cache"],
+    );
+    const custom = {
+      ...settings("phone", "follower"),
+      excludePatterns: withVaultConfigExclusion(["Private/**", ".agents/**"], ".obsidian"),
+    };
+
+    const result = await new SyncEngine(follower, remote, custom).run({
+      ...EMPTY_SYNC_STATE,
+      entries: {},
+    });
+
+    expect(result.summary.deletedLocalFolders).toBe(3);
+    expect(follower.folders.has("notes")).toBe(true);
+    expect(follower.folders.has("Private/empty")).toBe(true);
+    expect(follower.folders.has(".agents/cache")).toBe(true);
+    expect(follower.folders.has(".obsidian")).toBe(true);
+    expect(follower.folders.has(".trash")).toBe(true);
+    expect(follower.folders.has("empty")).toBe(false);
+  });
+
+  it("does not prune empty folders in writer mode", async () => {
+    const remote = new MemoryRemote();
+    const writer = new MemoryVault({}, ["drafts/empty"]);
+
+    const result = await new SyncEngine(writer, remote, settings("desktop", "writer")).run({
+      ...EMPTY_SYNC_STATE,
+      entries: {},
+    });
+
+    expect(result.summary.deletedLocalFolders).toBe(0);
+    expect(writer.folders.has("drafts/empty")).toBe(true);
+  });
+
+  it("does not return an advanced follower state when folder cleanup fails", async () => {
+    const remote = new MemoryRemote();
+    await remote.seed({ "note.md": "remote" });
+    const follower = new FailingFolderCleanupVault({ "note.md": "remote" });
+    const initial = { ...EMPTY_SYNC_STATE, entries: {} };
+
+    await expect(
+      new SyncEngine(follower, remote, settings("phone", "follower")).run(initial),
+    ).rejects.toThrow("Folder cleanup failed");
+
+    expect(initial.baseCommitSha).toBeNull();
   });
 });

@@ -43,6 +43,8 @@ Use a fine-grained GitHub token restricted to the selected repository with:
 A follower never creates commits or updates a Git reference. Remote content is authoritative.
 On initial sync and after an accidental follower edit, the writer's version is restored without
 creating a conflict file. The displaced local version is moved to Obsidian's trash for recovery.
+After file verification succeeds, the follower also removes stale empty folders that are not
+excluded, so deleted and renamed directory trees disappear from Obsidian's file explorer.
 
 Use a fine-grained GitHub token restricted to the selected repository with:
 
@@ -79,6 +81,7 @@ WeChat do not index every vault attachment as personal photos.
   Release Assets and recovered through Obsidian using the hidden index.
 - First sync must read or download every included file once.
 - Synchronization is periodic, not real-time.
+- Automatic sync runs silently; manual sync reports its result in an Obsidian notice.
 - Rename operations are represented as create plus delete.
 - The repository is access-controlled but files are not end-to-end encrypted.
 

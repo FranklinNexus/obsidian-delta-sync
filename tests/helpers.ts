@@ -10,19 +10,22 @@ import type {
   RemoteSnapshot,
   SyncState,
 } from "../src/types";
-import { gitBlobSha, sha256, shouldExclude } from "../src/utils";
+import { gitBlobSha, sha256, shouldExclude, shouldPreserveFolder } from "../src/utils";
 
 const encoder = new TextEncoder();
 
 export class MemoryVault implements LocalVault {
   readonly files = new Map<string, Uint8Array>();
+  readonly folders = new Set<string>();
   readonly trashed: string[] = [];
   readonly readCounts = new Map<string, number>();
   private readonly mtimes = new Map<string, number>();
   private clock = 1;
 
-  constructor(initial: Record<string, string> = {}) {
+  constructor(initial: Record<string, string> = {}, initialFolders: string[] = []) {
+    for (const folder of initialFolders) this.addFolderWithParents(folder);
     for (const [path, content] of Object.entries(initial)) {
+      this.addParentFolders(path);
       this.files.set(path, encoder.encode(content));
       this.mtimes.set(path, this.clock++);
     }
@@ -34,6 +37,7 @@ export class MemoryVault implements LocalVault {
   }
 
   setText(path: string, text: string): void {
+    this.addParentFolders(path);
     this.files.set(path, encoder.encode(text));
     this.mtimes.set(path, this.clock++);
   }
@@ -102,6 +106,7 @@ export class MemoryVault implements LocalVault {
   }
 
   async write(path: string, bytes: Uint8Array): Promise<void> {
+    this.addParentFolders(path);
     this.files.set(path, new Uint8Array(bytes));
     this.mtimes.set(path, this.clock++);
   }
@@ -110,6 +115,38 @@ export class MemoryVault implements LocalVault {
     if (this.files.delete(path)) {
       this.mtimes.delete(path);
       this.trashed.push(path);
+    }
+  }
+
+  async pruneEmptyFolders(excludePatterns: string[]): Promise<number> {
+    const folders = [...this.folders].sort(
+      (left, right) => right.split("/").length - left.split("/").length,
+    );
+    let deleted = 0;
+    for (const folder of folders) {
+      if (shouldPreserveFolder(folder, excludePatterns)) continue;
+      const prefix = `${folder}/`;
+      const hasChildren =
+        [...this.files.keys()].some((path) => path.startsWith(prefix)) ||
+        [...this.folders].some((path) => path !== folder && path.startsWith(prefix));
+      if (hasChildren) continue;
+      this.folders.delete(folder);
+      deleted += 1;
+    }
+    return deleted;
+  }
+
+  private addParentFolders(path: string): void {
+    const segments = path.split("/").slice(0, -1);
+    for (let index = 1; index <= segments.length; index += 1) {
+      this.folders.add(segments.slice(0, index).join("/"));
+    }
+  }
+
+  private addFolderWithParents(path: string): void {
+    const segments = path.split("/").filter(Boolean);
+    for (let index = 1; index <= segments.length; index += 1) {
+      this.folders.add(segments.slice(0, index).join("/"));
     }
   }
 }

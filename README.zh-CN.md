@@ -9,6 +9,7 @@ Delta Sync 是一个面向 Obsidian 的 GitHub 增量同步插件。它不需要
 手机、平板与其他电脑设为 **Pull-only follower**。Follower 使用另一个仅有 `Contents: Read-only` 权限的 token，只会拉取远端内容，无法创建 GitHub 提交或更新分支。插件限制和 GitHub 令牌权限共同避免从设备误推送。
 
 这种单 Writer 工作流不会产生 Git 冲突标记，也不会在 Vault 中留下 Git 元数据。不要在 Follower 上编辑笔记；首次同步或 Follower 发生本地修改时，插件会直接还原 Writer 的规范版本，不创建冲突副本；被替换的本地版本会移入 Obsidian 回收站，可自行恢复。
+文件内容校验通过后，Follower 还会删除同步范围内残留的空目录，因此 Writer 删除或重命名目录后，旧目录也会从手机的 Obsidian 文件列表中消失。配置目录、回收站和自定义排除目录不会被清理。
 
 ## 初次配置
 
@@ -30,6 +31,7 @@ Delta Sync 是一个面向 Obsidian 的 GitHub 增量同步插件。它不需要
 - 默认最大单文件 25 MB，最高可设置为 100 MB。
 - 当前 Obsidian 配置目录（包括自定义目录）、`.trash`、`.git`、超过大小限制的文件和自定义排除规则不会上传。
 - 同步只在 Obsidian 打开时运行。iOS 和 Android 不保证应用完全关闭后的定时后台执行。
+- 自动同步成功时保持静默；手动同步仍会显示结果通知，状态栏和同步历史也会记录结果。
 - Android 端会自动在 Vault 根目录创建本地 `.nomedia` 标记，避免系统相册、微信图片选择器把 Obsidian 附件全部当成照片扫出来。
 
 ## 隐私

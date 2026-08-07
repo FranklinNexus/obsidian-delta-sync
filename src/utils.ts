@@ -134,6 +134,15 @@ export function shouldExclude(path: string, userPatterns: string[]): boolean {
   return [...DEFAULT_EXCLUDES, ...userPatterns].some((pattern) => globMatches(path, pattern));
 }
 
+export function shouldPreserveFolder(path: string, userPatterns: string[]): boolean {
+  const normalized = normalizeVaultPath(path).replace(/\/+$/u, "");
+  if (!normalized) return true;
+  return (
+    shouldExclude(normalized, userPatterns) ||
+    shouldExclude(`${normalized}/.delta-sync-folder-probe`, userPatterns)
+  );
+}
+
 export function withVaultConfigExclusion(patterns: string[], configDir: string): string[] {
   const normalizedConfigDir = normalizeVaultPath(configDir).replace(/\/+$/u, "");
   if (!normalizedConfigDir) return [...patterns];

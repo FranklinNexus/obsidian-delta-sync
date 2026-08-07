@@ -8,6 +8,7 @@ function summaryText(summary: SyncSummary): string {
     `Upload: ${summary.uploaded}`,
     `Download: ${summary.downloaded}`,
     `Delete local: ${summary.deletedLocal}`,
+    `Delete empty local folders: ${summary.deletedLocalFolders ?? 0}`,
     `Delete remote: ${summary.deletedRemote}`,
     `Conflicts: ${summary.conflicts}`,
     `Skipped: ${summary.skipped}`,

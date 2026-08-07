@@ -1,6 +1,12 @@
-import { TFile, normalizePath, type App, type Vault } from "obsidian";
+import { TFile, TFolder, normalizePath, type App, type Vault } from "obsidian";
 import type { LocalFileSnapshot, LocalIndex, LocalScanResult, LocalVault } from "./types";
-import { gitBlobSha, normalizeVaultPath, sha256, shouldExclude } from "./utils";
+import {
+  gitBlobSha,
+  normalizeVaultPath,
+  sha256,
+  shouldExclude,
+  shouldPreserveFolder,
+} from "./utils";
 
 export class ObsidianVaultAdapter implements LocalVault {
   private readonly dirtyPaths = new Set<string>();
@@ -144,6 +150,34 @@ export class ObsidianVaultAdapter implements LocalVault {
     if (existing instanceof TFile) {
       await this.app.fileManager.trashFile(existing);
       this.markDirty(normalized);
+    }
+  }
+
+  async pruneEmptyFolders(excludePatterns: string[]): Promise<number> {
+    let deleted = 0;
+    for (;;) {
+      const folders = this.vault
+        .getAllLoadedFiles()
+        .filter((entry): entry is TFolder => entry instanceof TFolder && !entry.isRoot())
+        .sort((left, right) => right.path.split("/").length - left.path.split("/").length);
+      let deletedThisPass = 0;
+
+      for (const folder of folders) {
+        const path = normalizeVaultPath(folder.path);
+        if (shouldPreserveFolder(path, excludePatterns)) continue;
+
+        const current = this.vault.getFolderByPath(path);
+        if (current === null || current.children.length > 0) continue;
+        await this.vault.delete(current, false);
+        if (this.vault.getFolderByPath(path) !== null) {
+          throw new Error(`Empty folder cleanup did not remove ${path}`);
+        }
+        deleted += 1;
+        deletedThisPass += 1;
+      }
+
+      if (deletedThisPass === 0) return deleted;
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
     }
   }
 }

@@ -123,6 +123,7 @@ export interface SyncSummary {
   uploaded: number;
   downloaded: number;
   deletedLocal: number;
+  deletedLocalFolders?: number;
   deletedRemote: number;
   conflicts: number;
   skipped: number;
@@ -166,6 +167,7 @@ export interface LocalVault {
   read(path: string): Promise<Uint8Array>;
   write(path: string, bytes: Uint8Array): Promise<void>;
   trash(path: string): Promise<void>;
+  pruneEmptyFolders(excludePatterns: string[]): Promise<number>;
 }
 
 export interface SyncRunResult {
