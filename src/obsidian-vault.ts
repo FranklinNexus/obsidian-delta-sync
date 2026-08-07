@@ -11,6 +11,7 @@ import {
 export class ObsidianVaultAdapter implements LocalVault {
   private readonly dirtyPaths = new Set<string>();
   private readonly pendingFolderCreations = new Map<string, Promise<void>>();
+  private hasCompletedFullFolderScan = false;
 
   constructor(
     private readonly vault: Vault,
@@ -156,28 +157,58 @@ export class ObsidianVaultAdapter implements LocalVault {
   async pruneEmptyFolders(excludePatterns: string[]): Promise<number> {
     let deleted = 0;
     for (;;) {
-      const folders = this.vault
-        .getAllLoadedFiles()
-        .filter((entry): entry is TFolder => entry instanceof TFolder && !entry.isRoot())
-        .sort((left, right) => right.path.split("/").length - left.path.split("/").length);
+      const folderPaths = this.hasCompletedFullFolderScan
+        ? this.vault
+            .getAllLoadedFiles()
+            .filter((entry): entry is TFolder => entry instanceof TFolder && !entry.isRoot())
+            .map((folder) => normalizeVaultPath(folder.path))
+        : await this.listAllFolders(excludePatterns);
+      const folders = folderPaths.sort(
+        (left, right) => right.split("/").length - left.split("/").length,
+      );
       let deletedThisPass = 0;
 
-      for (const folder of folders) {
-        const path = normalizeVaultPath(folder.path);
+      for (const path of folders) {
         if (shouldPreserveFolder(path, excludePatterns)) continue;
 
-        const current = this.vault.getFolderByPath(path);
-        if (current === null || current.children.length > 0) continue;
-        await this.vault.delete(current, false);
-        if (this.vault.getFolderByPath(path) !== null) {
+        const normalizedPath = normalizePath(path);
+        if (!(await this.vault.adapter.exists(normalizedPath))) continue;
+        const listing = await this.vault.adapter.list(normalizedPath);
+        if (listing.files.length > 0 || listing.folders.length > 0) continue;
+        await this.vault.adapter.rmdir(normalizedPath, false);
+        if (await this.vault.adapter.exists(normalizedPath)) {
           throw new Error(`Empty folder cleanup did not remove ${path}`);
         }
         deleted += 1;
         deletedThisPass += 1;
       }
 
-      if (deletedThisPass === 0) return deleted;
-      await new Promise((resolve) => window.setTimeout(resolve, 0));
+      if (deletedThisPass === 0) {
+        this.hasCompletedFullFolderScan = true;
+        return deleted;
+      }
+      await new Promise((resolve) => globalThis.setTimeout(resolve, 0));
     }
+  }
+
+  private async listAllFolders(excludePatterns: string[]): Promise<string[]> {
+    const folders = new Set<string>();
+    const pending = [""];
+    while (pending.length > 0) {
+      const directory = pending.pop();
+      if (directory === undefined) break;
+      const listing = await this.vault.adapter.list(normalizePath(directory));
+      for (const listedFolder of listing.folders) {
+        const listedPath = normalizeVaultPath(listedFolder).replace(/\/+$/u, "");
+        const path =
+          directory && !listedPath.startsWith(`${directory}/`)
+            ? `${directory}/${listedPath}`
+            : listedPath;
+        if (!path || folders.has(path)) continue;
+        folders.add(path);
+        if (!shouldPreserveFolder(path, excludePatterns)) pending.push(path);
+      }
+    }
+    return [...folders];
   }
 }
