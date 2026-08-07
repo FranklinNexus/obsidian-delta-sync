@@ -187,7 +187,6 @@ export class ObsidianVaultAdapter implements LocalVault {
         this.hasCompletedFullFolderScan = true;
         return deleted;
       }
-      await new Promise((resolve) => globalThis.setTimeout(resolve, 0));
     }
   }
 
