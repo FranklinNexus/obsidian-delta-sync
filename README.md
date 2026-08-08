@@ -1,89 +1,132 @@
 # Delta Sync
 
-Delta Sync synchronizes an Obsidian vault through a GitHub repository without a local Git
-installation. It is designed for one writer device and any number of pull-only follower devices.
-It runs only while Obsidian is open.
+**A subscription-free Obsidian Sync alternative built on GitHub.**
 
-This project is a local fork of
-[Docs Sync](https://github.com/luhaifeng666/obsidian-docs-sync). The original MIT license and
-copyright notice are retained.
+Delta Sync uses a private GitHub repository as a versioned transport layer. One desktop Obsidian
+vault is the canonical `Writer`; Android, iOS, tablet, and spare computers are `Pull-only
+followers`. Everything runs inside Obsidian: no local Git installation, no `.git` directory in
+the vault, no Syncthing daemon to maintain, and no conflict-copy files.
 
-[中文说明](README.zh-CN.md)
+## The problem it solves
 
-## Why it is incremental
+Obsidian Sync is convenient, but long-term use requires a subscription. Local Git workflows add
+setup and maintenance overhead, especially on mobile. Syncthing depends on both applications
+remaining available in the background, which is unreliable under Android power management.
 
-- The first sync reads each included local file once.
-- Later syncs enumerate paths and compare `mtime` and size against a persistent local index.
-- Vault file events force a re-read even when a filesystem timestamp is unchanged.
-- Unchanged files reuse their cached Git blob SHA and are not opened or hashed again.
-- If the GitHub branch HEAD is unchanged, the cached remote tree is reused after one HEAD request.
-- If the branch changed, only tree metadata is fetched and only changed blobs are downloaded.
-- Blob downloads use raw bytes instead of a base64 text copy.
-- Initial and large follower pulls download independent files with four bounded workers.
-- Binary files and large text files use private GitHub Release Assets. The sync branch contains only
-  normal small UTF-8 files plus a hidden asset index, so attachments do not create a large Git history.
+Delta Sync addresses those costs directly:
 
-## Device roles
+- **No Obsidian Sync subscription**: the plugin is MIT-licensed and free; a GitHub private
+  repository uses the account's available free allowance for transport and history.
+- **No local synchronization stack**: no Git metadata, Git client, Syncthing pairing, or separate
+  service to keep alive.
+- **Predictable conflict policy**: one Writer is the only upload source. Followers pull the
+  Writer's canonical state, so the workflow does not create Git merge markers or conflicted
+  copies.
 
-### Writer
+GitHub still applies storage, API, network, and account limits. The project does not bypass them;
+for a typical personal vault, the practical cost can remain zero.
 
-A writer uploads local changes, pulls remote changes, and advances the sync branch atomically.
-Large first syncs construct a short private commit chain in batches before the branch moves, so
-other devices never observe a partial tree. Small UTF-8 notes are created inline in Tree requests.
-Binary and large files are uploaded with bounded concurrency to a dedicated GitHub Release, then a
-hidden index is committed with the normal files. The branch head is checked before the update and
-force pushes are never used.
+## How it works
 
-Use a fine-grained GitHub token restricted to the selected repository with:
+```text
+Desktop Obsidian (Writer)
+        │  incremental commits + release assets
+        ▼
+GitHub private repository
+        │  read-only pull
+        ├── Samsung Android (Follower)
+        ├── Tablet (Follower)
+        └── Other Obsidian devices (Follower)
+```
 
-- `Contents: Read and write`
+### Writer and pull-only follower roles
 
-### Pull-only follower
+The desktop Writer uploads local changes and advances the configured branch. Each follower uses a
+separate fine-grained token with `Contents: Read-only`, and the plugin also prevents follower
+uploads. If a follower is edited accidentally, the remote Writer version is restored; the
+displaced local file is moved to Obsidian's trash for recovery. This deliberately gives up
+multi-device simultaneous editing in exchange for a stable, auditable single-source workflow.
 
-A follower never creates commits or updates a Git reference. Remote content is authoritative.
-On initial sync and after an accidental follower edit, the writer's version is restored without
-creating a conflict file. The displaced local version is moved to Obsidian's trash for recovery.
-After file verification succeeds, the follower also removes stale empty folders that are not
-excluded, so deleted and renamed directory trees disappear from Obsidian's file explorer.
+### Incremental synchronization
 
-Use a fine-grained GitHub token restricted to the selected repository with:
+- The first sync reads each included file once.
+- Later runs use a persistent local index, file events, modification time, and size to detect
+  changes without re-reading unchanged files.
+- An unchanged remote branch requires one HEAD check; the cached remote tree is reused.
+- Followers download independent files with bounded concurrency.
+- Renames are represented as create plus delete, keeping both Obsidian file trees consistent.
 
-- `Contents: Read-only`
+### Attachments and large files
 
-The read-only token also enforces the role on GitHub.
+Images, PDFs, Office documents, and other binary or large files are stored as private GitHub
+Release Assets. The Git branch contains normal small UTF-8 files plus a hidden asset index, so
+attachments do not inflate Git history and no sync metadata file appears in the vault. The default
+per-file limit is 25 MB, configurable up to GitHub's 100 MB hard limit.
 
-## Setup
+### Integrity and cleanup guarantees
 
-1. Install and enable Delta Sync on each device.
-2. Select the same GitHub repository and branch.
-3. Set the desktop device to `Writer` and mobile devices to `Pull-only follower`.
-4. Store the appropriate fine-grained token in Obsidian Secret Storage.
-5. Test the connection.
-6. Preview and explicitly confirm the first sync.
-7. Enable automatic sync to run on startup, app foreground, after a short local-edit debounce on a
-   writer, and on the configured interval.
+- The Writer checks the remote branch HEAD before publishing, preventing an overwrite of an
+  unexpected remote update.
+- Large first syncs build complete commit objects before advancing the branch, so followers never
+  observe a partial vault.
+- Followers verify downloaded file contents before pruning stale empty directories.
+- `.obsidian`, `.trash`, `.git`, `.agents`, and configured exclusions remain protected.
+- Android vault roots receive a local `.nomedia` marker so photo pickers and apps such as WeChat do
+  not index every attachment as a personal photo.
 
-The dedicated repository may start empty. Delta Sync initializes it with one real vault file, then
-constructs the remaining first-sync changes before atomically advancing the configured sync branch.
-Its hidden Release Asset index is never created inside the Vault.
+## Recommended setup
 
-Do not run another tool that writes the same vault files. The active Obsidian configuration
-directory (including custom locations), `.trash`, `.git`, oversized files, and custom glob patterns
-are excluded. Remote deletions use the Obsidian trash.
-On Android, Delta Sync creates a local `.nomedia` marker so the system photo picker and apps like
-WeChat do not index every vault attachment as personal photos.
+| Device                         | Role               | GitHub permission          | Purpose                                       |
+| ------------------------------ | ------------------ | -------------------------- | --------------------------------------------- |
+| Desktop (`E:\\Obsidian Vault`) | Writer             | `Contents: Read and write` | Edit, upload, and publish the canonical state |
+| Samsung Android                | Pull-only follower | `Contents: Read-only`      | View, search, and pull automatically          |
+| Other devices                  | Pull-only follower | `Contents: Read-only`      | View, search, and pull automatically          |
 
-## Limits
+Keep exactly one physical vault directory. Do not create a second copy under Desktop, `Program
+Files`, or another path, and do not let Obsidian Sync, Syncthing, iCloud, or Remotely Save write
+the same vault.
 
-- GitHub repositories only.
-- Default maximum file size: 25 MB. Configurable up to the GitHub hard limit of 100 MB.
-- The GitHub branch is not a complete attachment browser: attachments and large files are stored as
-  Release Assets and recovered through Obsidian using the hidden index.
-- First sync must read or download every included file once.
-- Synchronization is periodic, not real-time.
-- Automatic sync runs silently; manual sync reports its result in an Obsidian notice.
-- Rename operations are represented as create plus delete.
-- The repository is access-controlled but files are not end-to-end encrypted.
+## Install and first sync
+
+1. Install and enable Delta Sync on every device.
+2. Create a dedicated GitHub private repository and branch for the vault.
+3. On the desktop, select `Writer` and enter the owner, repository, branch, device name, and a
+   fine-grained token restricted to that repository with `Contents: Read and write`.
+4. On each mobile or secondary device, select `Pull-only follower` and use a separate token with
+   `Contents: Read-only`.
+5. Run **Test connection**, then **Preview** the initial changes and explicitly confirm the first
+   sync.
+6. Enable **Automatic sync**. It runs on startup, app foreground, after a short Writer edit
+   debounce, and at the configured interval. Successful automatic runs stay quiet; manual runs
+   still report their result.
+
+## Cost and limits
+
+| Item                       | Delta Sync                                                       |
+| -------------------------- | ---------------------------------------------------------------- |
+| Obsidian Sync subscription | Not required                                                     |
+| Plugin                     | Free and MIT-licensed                                            |
+| Transport and history      | GitHub private repository and Releases within account limits     |
+| Local Git / Syncthing      | Not required                                                     |
+| Operational limits         | GitHub storage, API rate, network, and Android background policy |
+
+A private GitHub repository is access-controlled but not end-to-end encrypted. Encrypt sensitive
+material inside the vault before syncing. The plugin includes no telemetry, advertising, or
+third-party tracking.
+
+## Scope
+
+Delta Sync is designed for personal knowledge bases, study notes, research material, and
+attachment libraries distributed from one computer to mobile devices. It is not a multi-writer
+merge engine or a real-time collaborative editor. Automatic sync runs while Obsidian is alive;
+Android resumes on the next app open or foreground event after the OS suspends the process.
+
+## Privacy and exclusions
+
+Included file contents, paths, commit metadata, repository details, and device names are sent
+directly to GitHub's API. Tokens are kept in Obsidian Secret Storage and are never written to
+settings or logs. `.obsidian`, `.trash`, `.git`, oversized files, and custom glob exclusions are
+not uploaded.
 
 ## Development
 
@@ -96,8 +139,10 @@ npm test
 npm run build
 ```
 
-Install a local build into one or more test vaults with:
+The repository includes unit tests, release consistency checks, and real Android-device coverage
+for create, modify, delete, rename, binary SHA-256 verification, and empty-folder cleanup.
 
-```bash
-node scripts/install-local.mjs /path/to/vault
-```
+## License
+
+MIT. The original [Docs Sync](https://github.com/luhaifeng666/obsidian-docs-sync) MIT license and
+copyright notice are retained.

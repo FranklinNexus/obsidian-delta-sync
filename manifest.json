@@ -1,9 +1,9 @@
 {
   "id": "delta-sync",
   "name": "Delta Sync",
-  "version": "0.5.8",
+  "version": "0.5.9",
   "minAppVersion": "1.12.7",
-  "description": "Incremental GitHub sync with writer and pull-only device roles.",
+  "description": "A free, subscription-free Obsidian Sync alternative: sync one Writer vault to GitHub and pull it to Android and other devices without local Git or Syncthing.",
   "author": "FranklinNexus",
   "authorUrl": "https://github.com/FranklinNexus",
   "isDesktopOnly": false

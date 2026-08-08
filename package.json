@@ -1,7 +1,7 @@
 {
   "name": "obsidian-delta-sync",
-  "version": "0.5.8",
-  "description": "Incremental GitHub sync for writer and pull-only Obsidian devices.",
+  "version": "0.5.9",
+  "description": "A free, subscription-free Obsidian Sync alternative using GitHub for one Writer vault and pull-only mobile devices.",
   "private": true,
   "type": "module",
   "main": "main.js",
