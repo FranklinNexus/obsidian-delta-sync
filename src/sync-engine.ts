@@ -230,8 +230,8 @@ export class SyncEngine {
         case "conflict-local-modified-remote-deleted": {
           if (!decision.conflictPath) throw new Error("Conflict path is missing");
           const localContent = await this.localBytes(local, decision.path);
-          await this.localVault.trash(decision.path);
           await this.localVault.write(decision.conflictPath, localContent);
+          await this.localVault.trash(decision.path);
           mutations.push({
             path: decision.conflictPath,
             kind: "put",

@@ -43,6 +43,80 @@ class FailingFolderCleanupVault extends MemoryVault {
 }
 
 describe("SyncEngine", () => {
+  it.each(["local", "remote"])(
+    "preserves edits when %s deletion conflicts fail and retry",
+    async (deletedSide) => {
+      const remote = new MemoryRemote();
+      await remote.seed({ "note.md": "base" });
+      const vault = new MemoryVault({ "note.md": "base" });
+      const engine = new SyncEngine(vault, remote, settings("writer"));
+      const baseline = await engine.run({ ...EMPTY_SYNC_STATE, entries: {} });
+      if (deletedSide === "local") {
+        await vault.trash("note.md");
+        await remote.seed({ "note.md": "edited" });
+      } else {
+        vault.setText("note.md", "edited");
+        await remote.remove("note.md");
+      }
+      for (let attempt = 0; attempt < 3; attempt++) {
+        remote.failNextCommit = true;
+        await expect(engine.run(baseline.nextState)).rejects.toThrow("Remote branch changed");
+        expect([...vault.files.keys()].filter((p) => p.includes("sync-conflict"))).toHaveLength(1);
+      }
+      const result = await engine.run(baseline.nextState);
+      expect(vault.text("note.md")).toBeUndefined();
+      const backup = [...vault.files.keys()].find((p) => p.includes("sync-conflict")) ?? "missing";
+      expect(vault.text(backup)).toBe("edited");
+      expect((await remote.getSnapshot()).files.has(backup)).toBe(true);
+      expect((await engine.run(result.nextState)).summary.conflicts).toBe(0);
+    },
+  );
+
+  it("retries failed conflicts without multiplying backups or losing either version", async () => {
+    const remote = new MemoryRemote();
+    await remote.seed({ "note.md": "base" });
+    const vault = new MemoryVault({ "note.md": "base" });
+    const engine = new SyncEngine(vault, remote, settings("writer"));
+    const baseline = await engine.run({ ...EMPTY_SYNC_STATE, entries: {} });
+    vault.setText("note.md", "local edit");
+    await remote.seed({ "note.md": "remote edit" });
+    for (let attempt = 0; attempt < 3; attempt++) {
+      remote.failNextCommit = true;
+      await expect(engine.run(baseline.nextState)).rejects.toThrow("Remote branch changed");
+      expect([...vault.files.keys()].filter((p) => p.includes("sync-conflict"))).toHaveLength(1);
+      await remote.seed({ [`unrelated-${attempt}.md`]: String(attempt) });
+    }
+    const result = await engine.run(baseline.nextState);
+    const backup =
+      [...vault.files.keys()].find((p) => p.includes("sync-conflict")) ?? "missing-backup";
+    expect(vault.text(backup)).toBe("remote edit");
+    expect(vault.text("note.md")).toBe("local edit");
+    expect([...vault.files.keys()].filter((p) => p.includes("sync-conflict"))).toHaveLength(1);
+    const next = await engine.run(result.nextState, result.nextLocalIndex);
+    expect(next.summary.conflicts).toBe(0);
+    expect(next.summary.uploaded).toBe(0);
+  });
+
+  it("preserves a conflict backup edited by the user between retries", async () => {
+    const remote = new MemoryRemote();
+    await remote.seed({ "note.md": "base" });
+    const vault = new MemoryVault({ "note.md": "base" });
+    const engine = new SyncEngine(vault, remote, settings("writer"));
+    const baseline = await engine.run({ ...EMPTY_SYNC_STATE, entries: {} });
+    vault.setText("note.md", "local edit");
+    await remote.seed({ "note.md": "remote edit" });
+    remote.failNextCommit = true;
+    await expect(engine.run(baseline.nextState)).rejects.toThrow();
+    const backup =
+      [...vault.files.keys()].find((p) => p.includes("sync-conflict")) ?? "missing-backup";
+    vault.setText(backup, "manual notes");
+    await engine.run(baseline.nextState);
+    expect(vault.text(backup)).toBe("manual notes");
+    expect([...vault.files.values()].map((bytes) => new TextDecoder().decode(bytes))).toContain(
+      "remote edit",
+    );
+  });
+
   it("reports a follower replacement as a download and local trash operation", () => {
     const summary = summarizePlan({
       baseCommitSha: "base",

@@ -150,9 +150,16 @@ export function withVaultConfigExclusion(patterns: string[], configDir: string):
   return patterns.includes(configPattern) ? [...patterns] : [...patterns, configPattern];
 }
 
-export function conflictPath(path: string, source: string, timestamp = new Date()): string {
+export function conflictPath(
+  path: string,
+  source: string,
+  timestamp: Date | string = new Date(),
+): string {
   const safeSource = source.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-|-$/g, "") || "remote";
-  const stamp = timestamp.toISOString().replace(/[:.]/g, "-");
+  const stamp = (typeof timestamp === "string" ? timestamp : timestamp.toISOString()).replace(
+    /[^a-zA-Z0-9_-]/g,
+    "-",
+  );
   const slash = path.lastIndexOf("/");
   const directory = slash >= 0 ? path.slice(0, slash + 1) : "";
   const filename = slash >= 0 ? path.slice(slash + 1) : path;

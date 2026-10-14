@@ -183,6 +183,9 @@ export default class DeltaSyncPlugin extends Plugin {
 
   private handleVaultChange(...paths: string[]): void {
     this.localVault.markDirty(...paths);
+    // Sync writes also emit vault events. Let the next interval pick up edits
+    // made during a run instead of recursively queueing runs from our own writes.
+    if (this.syncPromise) return;
     this.scheduleLocalChangeSync();
   }
 
@@ -234,7 +237,7 @@ export default class DeltaSyncPlugin extends Plugin {
     }
     this.syncPromise = this.prepareAndRun(interactive).finally(() => {
       this.syncPromise = null;
-      if (this.automaticSyncQueued) {
+      if (this.automaticSyncQueued && this.data.settings.autoSync) {
         this.automaticSyncQueued = false;
         void this.requestSync(false);
       }
@@ -280,6 +283,7 @@ export default class DeltaSyncPlugin extends Plugin {
       }
       await this.executeSync(engine, preview, interactive);
     } catch (error) {
+      this.automaticSyncQueued = false;
       await this.handleFailure(error, interactive);
     }
   }
@@ -347,10 +351,6 @@ export default class DeltaSyncPlugin extends Plugin {
 
   private async handleFailure(error: unknown, interactive: boolean): Promise<void> {
     const message = errorMessage(error);
-    if (!interactive) {
-      this.setStatus("idle", "Delta Sync: waiting to retry");
-      return;
-    }
     this.appendLog({
       timestamp: new Date().toISOString(),
       status: "failed",
@@ -358,7 +358,7 @@ export default class DeltaSyncPlugin extends Plugin {
     });
     await this.persistData();
     this.setStatus("failed", "Delta Sync: failed");
-    new Notice(`Delta Sync failed: ${message}`, 8000);
+    if (interactive) new Notice(`Delta Sync failed: ${message}`, 8000);
   }
 
   async disconnect(): Promise<void> {
