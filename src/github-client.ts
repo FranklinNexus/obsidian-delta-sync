@@ -683,13 +683,20 @@ export class GitHubClient implements RemoteRepository {
       if (!assetsBySha.has(sha)) pendingAssets.set(sha, mutation.bytes);
     }
     if (pendingAssets.size > 0) {
-      const release = await this.assetRelease(pendingAssets.size);
-      const uploaded = await mapWithConcurrency(
-        [...pendingAssets],
-        RELEASE_ASSET_UPLOAD_CONCURRENCY,
-        async ([sha, bytes]) => [sha, await this.uploadReleaseAsset(release, sha, bytes)] as const,
-      );
-      for (const [sha, asset] of uploaded) assetsBySha.set(sha, asset);
+      const pending = [...pendingAssets];
+      // A vault may exceed one Release's capacity. Stage all buckets before
+      // publishing the manifest and moving the branch, preserving atomic visibility.
+      for (let offset = 0; offset < pending.length; offset += ASSET_RELEASE_MAX_ASSETS) {
+        const batch = pending.slice(offset, offset + ASSET_RELEASE_MAX_ASSETS);
+        const release = await this.assetRelease(batch.length);
+        const uploaded = await mapWithConcurrency(
+          batch,
+          RELEASE_ASSET_UPLOAD_CONCURRENCY,
+          async ([sha, bytes]) =>
+            [sha, await this.uploadReleaseAsset(release, sha, bytes)] as const,
+        );
+        for (const [sha, asset] of uploaded) assetsBySha.set(sha, asset);
+      }
     }
 
     const treeMutations: RemoteMutation[] = [];

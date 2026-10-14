@@ -9,6 +9,7 @@ import {
   type TransportResponse,
 } from "../src/github-client";
 import { gitBlobSha } from "../src/utils";
+import type { RemoteMutation, RemoteSnapshot } from "../src/types";
 
 class RecordingTransport implements RequestTransport {
   readonly requests: {
@@ -57,6 +58,58 @@ function raw(bytes: Uint8Array): TransportResponse {
 }
 
 describe("GitHubClient", () => {
+  it("stages more than 900 attachments across releases before producing one manifest", async () => {
+    const uploads = Array.from({ length: 900 }, (_, i) => ({
+      id: i + 1,
+      name: `asset-${i}`,
+      size: 3,
+    }));
+    const responses = [
+      failed(404, "Not Found"),
+      created({ id: 11, tag_name: "delta-sync-assets-v1", assets: [] }),
+      ...uploads.map(created),
+      ok({ id: 11, tag_name: "delta-sync-assets-v1", assets: [] }),
+    ];
+    for (let i = 0; i < 900; i += 100) responses.push(ok(uploads.slice(i, i + 100)));
+    responses.push(
+      ok([]),
+      failed(404, "Not Found"),
+      created({ id: 12, tag_name: "delta-sync-assets-v2", assets: [] }),
+      created({ id: 901, name: "last-asset", size: 3 }),
+    );
+    const transport = new RecordingTransport(responses);
+    const client = new GitHubClient({
+      owner: "owner",
+      repository: "repo",
+      branch: "main",
+      token: "secret",
+      transport,
+    });
+    const mutations: RemoteMutation[] = Array.from({ length: 901 }, (_, i) => ({
+      path: `image-${i}.png`,
+      kind: "put",
+      bytes: new Uint8Array([0, i >> 8, i & 255]),
+    }));
+    const prepared = await (
+      client as unknown as {
+        prepareAssetMutations(
+          base: RemoteSnapshot,
+          mutations: RemoteMutation[],
+        ): Promise<RemoteMutation[]>;
+      }
+    ).prepareAssetMutations({ commitSha: "head", treeSha: "tree", files: new Map() }, mutations);
+    expect(prepared).toHaveLength(1);
+    const manifest = prepared[0];
+    if (manifest?.kind !== "put") throw new Error("Missing manifest");
+    const parsed = JSON.parse(new TextDecoder().decode(manifest.bytes)) as {
+      files: Record<string, { asset: { releaseId: number } }>;
+    };
+    expect(Object.keys(parsed.files)).toHaveLength(901);
+    expect(parsed.files["image-899.png"]?.asset.releaseId).toBe(11);
+    expect(parsed.files["image-900.png"]?.asset.releaseId).toBe(12);
+    expect(transport.requests.some((request) => request.method === "PATCH")).toBe(false);
+  });
+
   beforeEach(() => vi.restoreAllMocks());
 
   it("reads a recursive Git tree", async () => {

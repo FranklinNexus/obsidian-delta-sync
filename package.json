@@ -1,6 +1,6 @@
 {
   "name": "obsidian-delta-sync",
-  "version": "0.5.10",
+  "version": "0.5.11",
   "description": "A free, subscription-free Obsidian Sync alternative using GitHub for one Writer vault and pull-only mobile devices.",
   "private": true,
   "type": "module",
