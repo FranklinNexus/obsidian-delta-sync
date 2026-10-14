@@ -58,6 +58,49 @@ function raw(bytes: Uint8Array): TransportResponse {
 }
 
 describe("GitHubClient", () => {
+  it("drains in-flight uploads and stops dispatching after a failure", async () => {
+    let uploads = 0;
+    let active = 0;
+    const transport: RequestTransport = {
+      async request(options) {
+        if (options.url.includes("/releases/tags/")) return failed(404, "Not Found");
+        if (options.url.endsWith("/releases"))
+          return created({ id: 11, tag_name: "delta-sync-assets-v1", assets: [] });
+        const id = ++uploads;
+        active++;
+        await new Promise((resolve) => setTimeout(resolve, id === 1 ? 1 : 10));
+        active--;
+        return id === 1
+          ? failed(422, "Validation Failed")
+          : created({ id, name: `asset-${id}`, size: 3 });
+      },
+    };
+    const client = new GitHubClient({
+      owner: "owner",
+      repository: "repo",
+      branch: "main",
+      token: "secret",
+      transport,
+    });
+    const mutations: RemoteMutation[] = Array.from({ length: 10 }, (_, i) => ({
+      path: `${i}.png`,
+      kind: "put",
+      bytes: new Uint8Array([0, 1, i]),
+    }));
+    await expect(
+      (
+        client as unknown as {
+          prepareAssetMutations(
+            base: RemoteSnapshot,
+            mutations: RemoteMutation[],
+          ): Promise<RemoteMutation[]>;
+        }
+      ).prepareAssetMutations({ commitSha: "head", treeSha: "tree", files: new Map() }, mutations),
+    ).rejects.toThrow("Validation Failed");
+    expect(active).toBe(0);
+    expect(uploads).toBe(3);
+  });
+
   it("stages more than 900 attachments across releases before producing one manifest", async () => {
     const uploads = Array.from({ length: 900 }, (_, i) => ({
       id: i + 1,
@@ -68,12 +111,8 @@ describe("GitHubClient", () => {
       failed(404, "Not Found"),
       created({ id: 11, tag_name: "delta-sync-assets-v1", assets: [] }),
       ...uploads.map(created),
-      ok({ id: 11, tag_name: "delta-sync-assets-v1", assets: [] }),
     ];
-    for (let i = 0; i < 900; i += 100) responses.push(ok(uploads.slice(i, i + 100)));
     responses.push(
-      ok([]),
-      failed(404, "Not Found"),
       created({ id: 12, tag_name: "delta-sync-assets-v2", assets: [] }),
       created({ id: 901, name: "last-asset", size: 3 }),
     );
@@ -108,6 +147,40 @@ describe("GitHubClient", () => {
     expect(parsed.files["image-899.png"]?.asset.releaseId).toBe(11);
     expect(parsed.files["image-900.png"]?.asset.releaseId).toBe(12);
     expect(transport.requests.some((request) => request.method === "PATCH")).toBe(false);
+  });
+
+  it("reuses content-addressed assets left by an interrupted transaction", async () => {
+    const bytes = new Uint8Array([0, 128, 255]);
+    const sha = await gitBlobSha(bytes);
+    const transport = new RecordingTransport([
+      ok({ id: 11, tag_name: "delta-sync-assets-v1", assets: [] }),
+      ok([{ id: 22, name: `asset-${sha}-previous-run`, size: 3 }]),
+      failed(404, "Not Found"),
+    ]);
+    const client = new GitHubClient({
+      owner: "owner",
+      repository: "repo",
+      branch: "main",
+      token: "secret",
+      transport,
+    });
+    const prepared = await (
+      client as unknown as {
+        prepareAssetMutations(
+          base: RemoteSnapshot,
+          mutations: RemoteMutation[],
+        ): Promise<RemoteMutation[]>;
+      }
+    ).prepareAssetMutations({ commitSha: "head", treeSha: "tree", files: new Map() }, [
+      { path: "image.png", kind: "put", bytes },
+    ]);
+    expect(prepared).toHaveLength(1);
+    expect(transport.requests.every((request) => request.method === "GET")).toBe(true);
+    const manifest = prepared[0];
+    if (manifest?.kind !== "put") throw new Error("Missing manifest");
+    expect(JSON.parse(new TextDecoder().decode(manifest.bytes))).toMatchObject({
+      files: { "image.png": { asset: { assetId: 22 } } },
+    });
   });
 
   beforeEach(() => vi.restoreAllMocks());

@@ -179,16 +179,26 @@ async function mapWithConcurrency<T, R>(
 ): Promise<R[]> {
   const results = new Array<R>(values.length);
   let nextIndex = 0;
+  let stopped = false;
   const workers = Array.from({ length: Math.min(concurrency, values.length) }, async () => {
-    while (nextIndex < values.length) {
+    while (!stopped && nextIndex < values.length) {
       const index = nextIndex;
       nextIndex += 1;
       const value = values[index];
       if (value === undefined) continue;
-      results[index] = await mapper(value);
+      try {
+        results[index] = await mapper(value);
+      } catch (error) {
+        stopped = true;
+        throw error;
+      }
     }
   });
-  await Promise.all(workers);
+  const settled = await Promise.allSettled(workers);
+  const failed = settled.find(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (failed) throw failed.reason;
   return results;
 }
 
@@ -371,8 +381,13 @@ export class GitHubClient implements RemoteRepository {
       ) {
         const apiMessage = (response.json as { message?: unknown }).message;
         if (typeof apiMessage === "string") message = apiMessage;
+        const details = (response.json as { errors?: unknown }).errors;
+        if (Array.isArray(details)) message += `: ${JSON.stringify(details)}`;
       }
-      throw new GitHubApiError(message, response.status);
+      throw new GitHubApiError(
+        `${method} ${path || "/release-assets"} [${response.status}]: ${message}`,
+        response.status,
+      );
     }
     return response;
   }
@@ -405,7 +420,7 @@ export class GitHubClient implements RemoteRepository {
       if (
         error instanceof GitHubApiError &&
         (error.status === 404 ||
-          (error.status === 409 && error.message === "Git Repository is empty."))
+          (error.status === 409 && error.message.endsWith("Git Repository is empty.")))
       ) {
         return null;
       }
@@ -599,8 +614,8 @@ export class GitHubClient implements RemoteRepository {
     );
   }
 
-  private async releaseAssetCount(releaseId: number): Promise<number> {
-    let total = 0;
+  private async releaseAssets(releaseId: number): Promise<GitHubReleaseAsset[]> {
+    const result: GitHubReleaseAsset[] = [];
     for (let page = 1; page <= 10; page += 1) {
       const assets = parseReleaseAssetList(
         (
@@ -609,25 +624,10 @@ export class GitHubClient implements RemoteRepository {
           )
         ).json,
       );
-      total += assets.length;
-      if (assets.length < 100) return total;
+      result.push(...assets);
+      if (assets.length < 100) return result;
     }
-    return total;
-  }
-
-  private async assetRelease(requiredSlots: number): Promise<GitHubRelease> {
-    if (requiredSlots > ASSET_RELEASE_MAX_ASSETS) {
-      throw new Error("Too many attachments in one sync transaction");
-    }
-    for (let bucket = 1; ; bucket += 1) {
-      const tagName = `${ASSET_RELEASE_TAG_PREFIX}${bucket}`;
-      const existing = await this.getAssetRelease(tagName);
-      if (existing) {
-        const assetCount = await this.releaseAssetCount(existing.id);
-        if (assetCount + requiredSlots <= ASSET_RELEASE_MAX_ASSETS) return existing;
-      }
-      if (!existing) return this.createAssetRelease(tagName);
-    }
+    return result;
   }
 
   private async uploadReleaseAsset(
@@ -683,12 +683,38 @@ export class GitHubClient implements RemoteRepository {
       if (!assetsBySha.has(sha)) pendingAssets.set(sha, mutation.bytes);
     }
     if (pendingAssets.size > 0) {
+      const buckets: { release: GitHubRelease; capacity: number }[] = [];
+      let nextBucket = 1;
+      for (; ; nextBucket++) {
+        const release = await this.getAssetRelease(`${ASSET_RELEASE_TAG_PREFIX}${nextBucket}`);
+        if (!release) break;
+        const existingAssets = await this.releaseAssets(release.id);
+        for (const asset of existingAssets) {
+          const sha = /^asset-([a-f0-9]{40})-/.exec(asset.name)?.[1];
+          if (sha && pendingAssets.get(sha)?.byteLength === asset.size) {
+            assetsBySha.set(sha, { releaseId: release.id, assetId: asset.id, name: asset.name });
+            pendingAssets.delete(sha);
+          }
+        }
+        buckets.push({
+          release,
+          capacity: Math.max(0, ASSET_RELEASE_MAX_ASSETS - existingAssets.length),
+        });
+      }
       const pending = [...pendingAssets];
       // A vault may exceed one Release's capacity. Stage all buckets before
       // publishing the manifest and moving the branch, preserving atomic visibility.
-      for (let offset = 0; offset < pending.length; offset += ASSET_RELEASE_MAX_ASSETS) {
-        const batch = pending.slice(offset, offset + ASSET_RELEASE_MAX_ASSETS);
-        const release = await this.assetRelease(batch.length);
+      for (let offset = 0; offset < pending.length;) {
+        let bucket = buckets.find((item) => item.capacity > 0);
+        if (!bucket) {
+          bucket = {
+            release: await this.createAssetRelease(`${ASSET_RELEASE_TAG_PREFIX}${nextBucket++}`),
+            capacity: ASSET_RELEASE_MAX_ASSETS,
+          };
+          buckets.push(bucket);
+        }
+        const batch = pending.slice(offset, offset + bucket.capacity);
+        const release = bucket.release;
         const uploaded = await mapWithConcurrency(
           batch,
           RELEASE_ASSET_UPLOAD_CONCURRENCY,
@@ -696,6 +722,8 @@ export class GitHubClient implements RemoteRepository {
             [sha, await this.uploadReleaseAsset(release, sha, bytes)] as const,
         );
         for (const [sha, asset] of uploaded) assetsBySha.set(sha, asset);
+        offset += batch.length;
+        bucket.capacity -= batch.length;
       }
     }
 
